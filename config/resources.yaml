@@ -1,0 +1,6 @@
+# Loaded with: msb create --resource-conf seu/config/resources.yaml
+# The reactor is 71 Maven modules and Testcontainers is memory-hungry; the
+# test-env compose file alone runs 17 containers.
+cpus: 6
+memory: "12G"
+idle_timeout: "4h"

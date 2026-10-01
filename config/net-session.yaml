@@ -1,0 +1,28 @@
+# Session egress policy: deny-by-default, Anthropic only.
+# Loaded with: msb create --net-conf seu/config/net-session.yaml
+#
+# Host list per https://code.claude.com/docs/en/network-config. This deliberately
+# includes the OAuth hosts Anthropic's own devcontainer init-firewall.sh omits --
+# without them /login and token refresh fail.
+#
+# `policy:` only accepts the presets none|public|open, so it is omitted: a
+# non-empty `allow:` list is what implies deny-by-default.
+#
+# NOTE: this filters the VM's *egress* only. Traffic that never leaves the guest
+# -- the Docker bridge, published container ports on localhost, Testcontainers --
+# is untouched, so the test-env and integration tests work fine under deny-all.
+allow:
+  - api.anthropic.com       # inference, WebFetch safety check, feature flags
+  - claude.ai               # claude.ai account authentication
+  - claude.com              # sign-in redirect
+  - platform.claude.com     # OAuth token exchange / refresh / revocation
+  - downloads.claude.ai     # native installer, plugin downloads
+strict: true
+
+# strict: true fails closed on non-intercepted HTTPS, so it REQUIRES tls.enabled.
+# Interception is also what closes domain-fronting: it verifies the connection
+# really goes where the SNI claims. microsandbox installs its CA into the guest
+# trust store and pre-sets NODE_EXTRA_CA_CERTS.
+tls:
+  enabled: true
+  verify_upstream: true

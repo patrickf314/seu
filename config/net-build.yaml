@@ -1,0 +1,52 @@
+# Build-phase egress policy. Used ONLY by the throwaway `seu build` sandbox,
+# never by a session. Everything reachable here is downloaded into the named
+# volumes so the locked-down session can work offline.
+#
+# Deliberately NOT strict and with TLS interception OFF: interception would
+# require importing the microsandbox CA into the JDK truststore, because the JVM
+# ignores the OS trust store and Maven would fail every HTTPS fetch. The build is
+# a controlled, one-shot step, so a plain hostname allowlist is the right trade.
+allow:
+  # Anthropic (so `claude` works inside the build sandbox too, for debugging)
+  - api.anthropic.com
+  - claude.ai
+  - claude.com
+  - platform.claude.com
+  - downloads.claude.ai
+
+  # Maven Central + the project's private GitHub Packages repositories
+  - repo.maven.apache.org
+  - repo1.maven.org
+  - maven.pkg.github.com
+  - github.com
+  - codeload.github.com
+  - "*.githubusercontent.com"
+
+  # node + pnpm (frontend-maven-plugin downloads its own copies into ./node)
+  - nodejs.org
+  - registry.npmjs.org
+
+  # Docker Hub, for the test-env images and Testcontainers.
+  # The registry API lives on *.docker.io, but image BLOBS are redirected to a
+  # CDN under docker.com -- production.cloudfront.docker.com (AWS) or
+  # production.cloudflare.docker.com depending on the edge you land on. Allowing
+  # only the cloudflare one makes every pull die with
+  # "lookup production.cloudfront.docker.com ... no such host".
+  - docker.io
+  - "*.docker.io"
+  - docker.com
+  - "*.docker.com"
+
+  # ghcr.io, for Paketo buildpack images (seu build --with-images)
+  - ghcr.io
+  - pkg-containers.githubusercontent.com
+
+  # Playwright browser binaries
+  - cdn.playwright.dev
+  - playwright.azureedge.net
+  - "*.azureedge.net"
+
+  # OS + toolchain
+  - deb.debian.org
+  - mise.jdx.dev
+strict: false

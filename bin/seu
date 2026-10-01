@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# seu -- run Claude Code on this project inside an isolated microsandbox VM.
+set -euo pipefail
+SEU_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+export SEU_ROOT
+
+usage() {
+  cat >&2 <<'USAGE'
+seu -- Claude Code in a hardware-isolated microVM, with a full build toolchain
+
+usage: seu <command> [options]
+
+  doctor              check the host and, if running, the VM
+  build [--with-images] [--rebuild]
+                      once per worktree: build the base image, download every
+                      Maven/pnpm/Docker/Playwright dependency, then open a shell
+  start               boot the VM (locked-down network) and start dockerd
+  stop                shut the VM down; /work and all caches persist
+  shell               open a shell in the VM, starting it if needed
+  status              show VM and toolchain state
+  pull                fetch the VM's commits into this worktree as a git remote
+  clean [--volumes]   remove the VM (and optionally its caches)
+
+options:
+  --with-images       build the tsv-neubiberg/* app images too, so that
+                      test/docker-compose.yml can come up (slow, ~20G)
+  --rebuild           force a base-image rebuild even if nothing changed
+
+env:
+  SEU_NET=session|build   egress profile for start/shell (default: session)
+  SEU_MSB=<path>          microsandbox binary
+  GITHUB_ACTOR / GITHUB_TOKEN
+                          GitHub Packages credentials, required by `build` only
+
+The worktree is mounted READ-ONLY at /src and cloned to /work inside the VM.
+Get work back out with `seu pull`.
+USAGE
+  exit 2
+}
+
+cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
+case "$cmd" in
+  doctor|build|start|stop|shell|status|pull|clean)
+    # shellcheck source=/dev/null
+    source "$SEU_ROOT/lib/cmd-$cmd.sh"; "cmd_$cmd" "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) printf 'seu: unknown command %q\n\n' "$cmd" >&2; usage ;;
+esac
