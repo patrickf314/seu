@@ -10,10 +10,9 @@ seu -- Claude Code in a hardware-isolated microVM, with a full build toolchain
 
 usage: seu <command> [options]
 
-  doctor              check the host and, if running, the VM
-  build [--with-images] [--rebuild]
-                      once per worktree: build the base image, download every
-                      Maven/pnpm/Docker/Playwright dependency, then open a shell
+  doctor              check the host, the project profile and, if running, the VM
+  build [options]     once per worktree: build the base image, fill every cache,
+                      then open a shell
   start               boot the VM (locked-down network) and start dockerd
   stop                shut the VM down; /work and all caches persist
   shell               open a shell in the VM, starting it if needed
@@ -21,16 +20,28 @@ usage: seu <command> [options]
   pull                fetch the VM's commits into this worktree as a git remote
   clean [--volumes]   remove the VM (and optionally its caches)
 
-options:
-  --with-images       build the tsv-neubiberg/* app images too, so that
-                      test/docker-compose.yml can come up (slow, ~20G)
+build options:
+  --with-images       build the project's application images too, so that the
+                      test compose file can come up (slow, lots of disk)
   --rebuild           force a base-image rebuild even if nothing changed
+  --no-host-m2        do not mount ~/.m2/repository into the build sandbox;
+                      download every artifact instead
+  --no-host-images    do not reuse Docker images from the host daemon
+  --refresh-images    re-export the host images even if nothing changed
+
+The project describes itself in .seu/config.conf (image_name, mise_config,
+maven_server, prepull). Without it, sensible defaults apply.
 
 env:
   SEU_NET=session|build   egress profile for start/shell (default: session)
   SEU_MSB=<path>          microsandbox binary
+  SEU_STATE_DIR=<path>    where bundles, pidfiles and staged images live
+  SEU_HOST_M2=<path>      host Maven repository (default: ~/.m2/repository)
+  SEU_USE_HOST_M2=0       same as --no-host-m2
   GITHUB_ACTOR / GITHUB_TOKEN
-                          GitHub Packages credentials, required by `build` only
+                          fallback artifact-repository credentials, `build` only
+
+`build` reads your ~/.m2 and host Docker images; a SESSION never sees either.
 
 The worktree is mounted READ-ONLY at /src and cloned to /work inside the VM.
 Get work back out with `seu pull`.

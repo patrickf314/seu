@@ -15,7 +15,7 @@ cmd_start() {
     ok "started"
   else
     local tag; tag="$(seu_image_tag)"
-    msb image list 2>/dev/null | grep -q "${tag#*:}" \
+    seu_image_loaded "$tag" \
       || die "base image $tag is not loaded -- run \`seu build\` first"
 
     step "Creating $SANDBOX (network profile: $NET_PROFILE)"

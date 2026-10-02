@@ -1,12 +1,13 @@
-# SEU base image for the tsv-neubiberg project.
+# SEU base image.
 #
 # Built on the HOST with Docker (full network), then handed to microsandbox:
 #   docker build -t seu-vm-website-react:<sha> . && docker save ... | msb load
 # Docker is a build-time dependency only; sessions run as a microVM.
 #
-# IMPORTANT: only the four named volumes (/work, ~/.m2, ~/.cache, /var/lib/docker)
-# survive the build-sandbox -> session-sandbox handoff. Anything apt installs must
-# therefore live HERE, not in a warm-up step -- it would be thrown away.
+# IMPORTANT: only the /seu named volume (behind /work, ~/.m2, ~/.cache and
+# dockerd's data-root) survives the build-sandbox -> session-sandbox handoff.
+# Anything apt installs must therefore live HERE, not in a warm-up step -- it
+# would be thrown away.
 FROM debian:bookworm-slim
 
 ARG CLAUDE_CODE_VERSION=
@@ -87,9 +88,10 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 seu \
  && chown -h seu:seu /work /home/seu/.m2 /home/seu/.cache
 
 # ------------------------------------------------------------- mise + toolchain
-# mise.toml is copied from the repository root by seu/lib/cmd-build.sh, so the
-# image always matches scripts/check-toolchain-from-mise.groovy, which fails the
-# Maven build when pom.xml and mise.toml drift apart.
+# The mise config is copied from the project by seu/lib/cmd-build.sh (see
+# `mise_config` in .seu/config.conf), so the image toolchain always matches what
+# the project's own build validates. A project without one gets an EMPTY file
+# here, which is a valid "no managed toolchain" answer.
 RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
  && chmod 0755 /usr/local/bin/mise
 
@@ -105,19 +107,19 @@ RUN mise trust --all \
 # not give Maven a JAVA_HOME.
 USER root
 RUN set -eu; \
-    JH="$(su seu -lc 'mise where java' 2>/dev/null)"; \
-    MH="$(su seu -lc 'mise where maven' 2>/dev/null)"; \
-    test -n "$JH" -a -n "$MH"; \
-    printf '%s\n' \
-      '# SEU toolchain, generated at image build time from mise.toml' \
+    JH="$(su seu -lc 'mise where java' 2>/dev/null || true)"; \
+    MH="$(su seu -lc 'mise where maven' 2>/dev/null || true)"; \
+    { printf '%s\n' \
+      '# SEU toolchain, generated at image build time from the project mise config' \
       'export MISE_DATA_DIR=/home/seu/.local/share/mise' \
       'export PATH="/home/seu/.local/share/mise/shims:$PATH"' \
-      "export JAVA_HOME=$JH" \
-      "export MAVEN_HOME=$MH" \
       'export DOCKER_HOST=unix:///var/run/docker.sock' \
       'export PNPM_HOME=/home/seu/.cache/pnpm' \
       'export PLAYWRIGHT_BROWSERS_PATH=/home/seu/.cache/ms-playwright' \
-      > /etc/profile.d/10-seu-toolchain.sh; \
+      'export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1'; \
+      if [ -n "$JH" ]; then printf 'export JAVA_HOME=%s\n' "$JH"; fi; \
+      if [ -n "$MH" ]; then printf 'export MAVEN_HOME=%s\n' "$MH"; fi; \
+    } > /etc/profile.d/10-seu-toolchain.sh; \
     chmod 0644 /etc/profile.d/10-seu-toolchain.sh
 
 COPY dockerd-run.sh session-init.sh warm.sh /usr/local/bin/
@@ -133,8 +135,17 @@ USER seu
 WORKDIR /home/seu
 
 # Auto-update would fight the pinned install and needs egress we do not grant.
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: `Playwright.create()` calls
+# Driver.ensureDriverInstalled(env, installBrowsers=true), which runs the driver's
+# `install` with NO browser argument -- and a bare install means ALL THREE
+# browsers, whatever the test actually launches. In an offline session that is a
+# guaranteed "ENOTFOUND cdn.playwright.dev" before a browser is even chosen.
+# Switching it off makes `playwright_browser` the single source of truth; the
+# warm-up's explicit `CLI install <browsers>` is unaffected, because the skip flag
+# is only read on the create() path.
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
     LANG=en_US.UTF-8

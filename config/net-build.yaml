@@ -41,8 +41,13 @@ allow:
   - ghcr.io
   - pkg-containers.githubusercontent.com
 
-  # Playwright browser binaries
+  # Playwright browser binaries. The client alternates between its own CDN and
+  # Microsoft's package service, so BOTH are required -- with only the first,
+  # every other attempt dies with "ENOTFOUND
+  # playwright.download.prss.microsoft.com". azureedge.net is the retired CDN,
+  # kept for older Playwright versions.
   - cdn.playwright.dev
+  - playwright.download.prss.microsoft.com
   - playwright.azureedge.net
   - "*.azureedge.net"
 
