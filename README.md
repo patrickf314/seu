@@ -40,12 +40,17 @@ Afterwards:
 ./seu/bin/seu start       # resume
 ./seu/bin/seu status      # VM, toolchain, docker, disk, git state
 ./seu/bin/seu pull        # fetch the VM's commits back as a git remote
+./seu/bin/seu port 8080   # forward a host port into the VM, docker-style
 ./seu/bin/seu clean       # remove the VM (add --volumes to drop the caches too)
 ```
 
 `build` takes `--with-images` (also produce the project's application images,
 which the test compose file needs — slower, a lot more disk), `--rebuild`,
 `--no-host-m2`, `--no-host-images` and `--refresh-images`.
+
+Your Claude Code settings, your `ccstatusline` layout and your login are carried
+into the VM on every `start`/`shell` — see
+[Your Claude Code setup follows you in](#your-claude-code-setup-follows-you-in).
 
 Inside the VM:
 
@@ -226,6 +231,38 @@ which points at the real problem. The warm-up also checks
 `~/.cache/ms-playwright` afterwards and warns per browser, so a silent no-op in
 the install step cannot reach a session unnoticed.
 
+### Playwright traces
+
+```bash
+seu playwright trace club/club-ui/club-ui-test/target/trace.zip
+```
+
+The path is relative to `/work` (a leading `/work/` is accepted). This starts
+Playwright's own trace viewer **inside the VM**, forwards its port out with the
+machinery behind `seu port`, and opens it in your browser. Ctrl-C stops the
+viewer and drops the forward.
+
+The trace never leaves the sandbox — only an HTTP port does. Your Mac needs no
+node, no `npx` and no network, which also means there is no copy of the trace
+sitting around on the host afterwards.
+
+It uses the same `playwright_pom` as the browser download, because the viewer
+ships inside the Playwright jar and that module's pom is what puts it on the
+classpath. A project without the key gets a clear error rather than a confusing
+Maven failure.
+
+Two details worth knowing, both verified against the driver bundle rather than
+assumed:
+
+- `show-trace --host/--port` makes the driver *serve* the viewer instead of
+  launching its bundled browser app. It still tries to open a browser tab in the
+  guest, where there is none, but Playwright swallows that failure
+  (`open(url).catch(() => {})`) and the server stays up.
+- The server answers `/` with a **relative** redirect
+  (`./trace/index.html?trace=…`), which the browser resolves against whatever
+  origin it asked. So the forwarded `http://127.0.0.1:<port>/` carries the trace
+  query along and nothing has to be rewritten for the port change.
+
 ## Reusing the host's Docker images
 
 Every image listed under `prepull` that the host already has is `docker save`d
@@ -242,6 +279,9 @@ image into the arm64 guest reproduces exactly the `exec format error` described
 below, on a container whose architecture looks perfectly correct.
 
 ## Credentials
+
+Artifact-repository credentials only — for the Anthropic login, see
+[Copying the login](#copying-the-login).
 
 `seu build` needs them; a session must not have them.
 
@@ -275,6 +315,94 @@ change above and now applies to one variable per server. `msb create
 **Consequence:** adding a *new* dependency does not work inside a session. Add it
 on the host and re-run `seu build`.
 
+## Your Claude Code setup follows you in
+
+A sandbox you have to re-configure is a sandbox you stop using. Every `seu
+start` and `seu shell` projects your host configuration into the VM, so there is
+nothing to set up in there and nothing to log in to:
+
+| on your Mac | in the VM | what happens to it |
+| --- | --- | --- |
+| `~/.claude/settings.json` | `~/.claude/settings.json` | host-only keys dropped, `vm/claude-settings.json` merged **on top** |
+| `~/.config/ccstatusline/settings.json` | same path | an `SEU <worktree>` badge is prepended to the first line |
+| `~/.claude.json` | same path | only the account and onboarding keys, **merged** into what the VM already has |
+| login Keychain, `Claude Code-credentials` | `~/.claude/.credentials.json` | the OAuth tokens, so `/login` is never needed |
+
+At **start** time, not baked into the image: changing a setting then costs
+nothing, where a baked copy would cost a full `seu build`. `lib/claude-config.py`
+does the projecting on the host; nothing is sourced or executed from either side.
+
+`SEU_SYNC_CLAUDE=0` turns all of it off and leaves the image's own
+`vm/claude-settings.json` in place. `SEU_SYNC_AUTH=0` keeps the settings but not
+the login.
+
+### What does not cross, and why
+
+- **`hooks`.** Yours shell out to `alerter`, which exists on macOS and not in a
+  Debian guest; every notification would do nothing but log a missing command.
+- **`installMethod`, `autoUpdaterStatus`, `apiKeyHelper`, `awsAuthRefresh`,
+  `otelHeadersHelper`, `forceLoginMethod`.** All of them describe the host
+  install or shell out to host-only tooling.
+- **Everything else in `~/.claude.json`.** It is ~90 keys of cached feature
+  flags, Statsig gates, tip counters and per-directory project state. The
+  account identity and the "you have already been through this" flags are the
+  only parts that mean anything in a fresh VM; `githubRepoPaths` and `projects`
+  are host filesystem layout.
+- **`statusLine.command`.** Replaced, not copied: on the host it may be an
+  absolute mise shim path that does not exist in the guest.
+
+The merge direction matters. Your settings are the *base* and
+`vm/claude-settings.json` goes **on top**, so the sandbox's own hardening always
+wins — a host `permissions.allow` can never re-open `Read(/src/**)`. Lists are
+unioned rather than replaced, so your `permissions.deny` entries survive
+alongside seu's.
+
+### The status line
+
+`ccstatusline` is in the base image as a pinned tarball under
+`/opt/ccstatusline`, run by Debian's `nodejs` rather than the project's
+mise-managed one — it has to keep working whatever node the project pins, or
+whether it pins one at all. mise's shims come first on `PATH`, so this stays
+invisible to the project. There is no npm in the image and a session has no
+egress to reach one, which is also why the generated config declares
+`installation.method = "pinned"`: nothing will offer to update itself in a
+session that could never do it.
+
+Your layout is reproduced as-is, with one addition: a bold green `SEU
+<worktree>` badge as the first widget. The one thing that must never be
+ambiguous is whether a terminal is inside the sandbox or on your Mac.
+
+### Copying the login
+
+macOS keeps the Claude Code tokens in the login Keychain; Linux keeps them in
+`$CLAUDE_CONFIG_DIR/.credentials.json`. Reading the one and writing the other is
+the whole of it — there is no login flow to replay, and `/login` inside the VM
+would want a browser the guest does not have.
+
+The first `seu start` after this raises a Keychain prompt. **Always Allow** and
+it never asks again; a denied prompt is not an error, the session just starts
+logged out.
+
+Three things are deliberate here:
+
+- **The copy lives on the sandbox's root disk**, never in the `/seu` volume and
+  never in the image. The root disk is re-created from the image whenever the
+  sandbox is, which is exactly the lifetime a copied credential should have.
+  `seu clean` takes it with it.
+- **The newer token wins.** Host and guest refresh independently, so by the
+  second start the guest's copy may well be the fresher one. The in-VM step
+  compares `expiresAt` and keeps whichever lives longest, instead of clobbering
+  a working session with a stale blob from the Keychain.
+- **Claude cannot read its own token.** `vm/claude-settings.json` denies
+  `Read(~/.claude/.credentials.json)`.
+
+**Know what this trades away.** A session is no longer only as privileged as the
+network policy allows — it holds a refresh token for your Anthropic account. The
+microVM boundary and the deny-by-default egress are what stand behind that, and
+`SEU_SYNC_AUTH=0` is there if you would rather it did not. Note also that
+refresh tokens rotate: if a long VM session refreshes, the Keychain copy your
+Mac is holding can go stale and you may have to `/login` on the host once.
+
 ## Network
 
 `config/net-session.yaml` is deny-by-default and allows only `api.anthropic.com`,
@@ -291,6 +419,38 @@ works under a deny-all policy.
 deliberately **not** `strict` and has TLS interception **off**: interception
 would require importing microsandbox's CA into the JDK truststore, because the
 JVM ignores the OS trust store and Maven would fail every HTTPS fetch.
+
+## Ports
+
+A dev server or a published container port inside the VM is reachable *in* the
+VM but has no path to your Mac. `seu port` opens one:
+
+```bash
+seu port                      # list the active forwards
+seu port 8080                 # shorthand for 8080:8080
+seu port 80:80 8080:8080      # HOST:GUEST, like docker
+seu port 0.0.0.0:8080:8080    # BIND:HOST:GUEST
+seu port --stop 8080          # drop one; --stop-all drops every forward
+```
+
+The default bind is `127.0.0.1`, not `0.0.0.0`: forwarding a port out of a
+sandbox should not also publish that sandbox to your local network. Ask for
+`*:` or an explicit bind address when you want that.
+
+Forwards are SSH tunnels against the **running** sandbox (see the maintenance
+note below for why they are not `msb create -p`), so ports can be added and
+dropped at any time and nothing in the VM restarts. They do not survive
+`seu stop` — `seu stop` and `seu clean` tear them down, so no `ssh -N` is ever
+left holding a host port.
+
+Forwards connect to **`localhost`** inside the VM, not to `127.0.0.1`. That
+matters: a Vite dev server binds `[::1]` only, and an IPv4-literal destination
+would come up fine and then refuse every connection. If a forward connects to
+nothing, run `ss -lntp` in the VM and check what the process actually bound.
+
+The first `seu port` generates `.seu-state/ssh/id_ed25519` and registers it with
+`msb ssh authorize`. That key is seu's own; `~/.ssh` is never read or written,
+and `-F /dev/null` keeps a personal `~/.ssh/config` from redirecting the tunnel.
 
 ## Getting work out
 
@@ -453,26 +613,60 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
 - The host's project-specific bits live in `<project>/.seu/config.conf` and are
   **parsed, never sourced**. Keep it that way: the whole point of seu is that the
   repository is not trusted, and a sourced config would hand it your Mac.
+- **`msb create -p HOST:GUEST` exists, but ports are fixed at create time.**
+  `msb modify` has no port flag at all — it only takes cpus, memory, disk, env,
+  labels, workdir and secrets. Adding a port to a live sandbox with `-p` would
+  therefore mean `msb create --replace`: root disk gone, dockerd and
+  `session-init.sh` re-run, every running process killed. That is why `seu port`
+  does not use it.
+- **`msb ssh` carries SSH `direct-tcpip` channels into a running sandbox**, so
+  plain OpenSSH `ssh -N -L` forwards a port with nothing restarted. The msb SSH
+  server is `russh` built into the binary, not an sshd in the guest;
+  `msb ssh serve --stdio <sandbox>` serves one transport over stdin/stdout,
+  which is exactly a `ProxyCommand`. Verified end to end against a live sandbox.
+  - `msb ssh serve` refuses to start without an authorized public key
+    (*"SSH server has no authorized public keys"*), unlike `msb ssh connect`,
+    which uses an internal identity. `msb ssh authorize --file <key>.pub` is
+    idempotent and writes to `~/.microsandbox/ssh/authorized_keys`.
+  - The username is not checked; the guest-side destination `127.0.0.1` is
+    accepted. Pass `--no-inactivity-timeout` or an idle tunnel is dropped.
+  - **Forward to `localhost` in the guest, never the `127.0.0.1` literal.** A
+    Vite dev server binds `[::1]` *only*, so an IPv4 literal destination finds
+    nothing: the tunnel comes up and then refuses every connection, which looks
+    like broken forwarding rather than a binding mismatch. `localhost` lets the
+    guest resolver try both families and still reaches 127.0.0.1-only listeners
+    (the trace viewer) and `0.0.0.0` ones (docker-proxy). Check with
+    `ss -lntp` inside the VM when a forward connects to nothing.
+  - **Check the host port *before* starting ssh.** Afterwards "something is
+    listening on that port" cannot distinguish our tunnel from the squatter that
+    made the bind fail, and a failed forward reads as a success. `ssh -o
+    ExitOnForwardFailure=yes` makes the failure fast, but the race is in the
+    readiness check, not in ssh.
 
 ## Layout
 
 ```
 bin/seu                     dispatcher
 lib/common.sh               identity, profile parsing, volumes, host mounts,
-                            host-image export, dockerd supervision
+                            host-image export, dockerd supervision,
+                            SSH plumbing, the port-forward registry and the
+                            Claude config/credential sync
     cmd-*.sh                one file per command
     maven-settings.py       generates the in-VM settings.xml; extracts credentials
-vm/Dockerfile               base image: toolchain + docker + Claude Code
+    claude-config.py        projects your ~/.claude setup onto the VM
+vm/Dockerfile               base image: toolchain + docker + Claude Code + ccstatusline
    dockerd-run.sh           foreground dockerd (see notes above)
    session-init.sh          clone /src -> /work
    warm.sh                  the whole `seu build` warm-up
-   claude-settings.json     in-VM Claude settings
+   claude-settings.json     the VM's own Claude settings, merged ON TOP of yours
 config/net-session.yaml     Anthropic-only egress
        net-build.yaml       wide egress, build phase only
        resources.yaml       cpus / memory / idle timeout
 examples/                   a real .seu/config.conf to copy into a project
-.seu-state/                 git bundles, dockerd pidfiles, staged host images
+.seu-state/                 git bundles, dockerd pidfiles, staged host images,
+                            per-forward pidfiles under <slug>/ports/
                             (gitignored; override with SEU_STATE_DIR)
+           ssh/             seu's own SSH key, shared by every project
 
 <project>/.seu/config.conf  the per-project profile (see above)
 ```

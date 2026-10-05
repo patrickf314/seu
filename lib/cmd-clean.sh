@@ -22,7 +22,13 @@ cmd_clean() {
       ok "removed"
     fi
   done
+  seu_port_stop_all
   seu_stop_dockerd
+
+  # Normally already gone -- seu_sync_claude_config deletes it the moment the
+  # files are in the VM. It only survives a crash between the two, and a stray
+  # copy of the OAuth blob is not a thing to leave lying around.
+  rm -rf "$STATE_DIR/claude"
 
   if [[ $drop_volumes -eq 1 ]]; then
     step "Removing named volumes"

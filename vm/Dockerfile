@@ -70,6 +70,31 @@ RUN curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
     fi \
  && rm -rf /var/lib/apt/lists/*
 
+# ------------------------------------------------------------------ ccstatusline
+# The status line the developer already uses on their Mac, so a VM shell reads
+# like their own shell -- plus an SEU badge, because the one thing that must
+# never be ambiguous is whether you are inside the sandbox or on the host.
+# lib/common.sh projects both configs in at `seu start`, so changing them needs
+# no rebuild; this step only has to put the binary there.
+#
+# Debian's nodejs, deliberately NOT the project's mise-managed one: the status
+# line has to keep working whatever node the project pins, or whether it pins one
+# at all, and mise's shims come first on PATH so this stays invisible otherwise.
+# ccstatusline publishes a single dependency-free bundle built for node>=14, so a
+# tarball and a wrapper is the whole install -- there is no npm in the image, and
+# a session has no egress to reach one.
+ARG CCSTATUSLINE_VERSION=2.2.29
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /opt/ccstatusline \
+ && curl -fsSL "https://registry.npmjs.org/ccstatusline/-/ccstatusline-${CCSTATUSLINE_VERSION}.tgz" \
+      | tar -xz -C /opt/ccstatusline --strip-components=1 \
+ && test -s /opt/ccstatusline/dist/ccstatusline.js \
+ && printf '#!/bin/sh\nexec /usr/bin/node /opt/ccstatusline/dist/ccstatusline.js "$@"\n' \
+      > /usr/local/bin/ccstatusline \
+ && chmod 0755 /usr/local/bin/ccstatusline \
+ && /usr/local/bin/ccstatusline --version
+
 # -------------------------------------------------------------------- the user
 # Non-root is not cosmetic: Claude Code refuses to start with
 # --dangerously-skip-permissions as root on Linux. Only dockerd runs as root.

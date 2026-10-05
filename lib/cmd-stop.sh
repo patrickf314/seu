@@ -6,6 +6,7 @@ cmd_stop() {
 
   if ! seu_sandbox_running "$SANDBOX"; then
     info "$SANDBOX is not running"
+    seu_port_stop_all
     seu_stop_dockerd
     return 0
   fi
@@ -21,6 +22,7 @@ cmd_stop() {
     ok "force-stopped"
   fi
 
+  seu_port_stop_all
   seu_stop_dockerd
   info "/work and all caches persist in the named volumes"
 }

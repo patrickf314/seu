@@ -18,6 +18,9 @@ usage: seu <command> [options]
   shell               open a shell in the VM, starting it if needed
   status              show VM and toolchain state
   pull                fetch the VM's commits into this worktree as a git remote
+  port [spec...]      forward host ports into the running VM, docker-style
+  playwright trace <path>
+                      open a Playwright trace from the VM in your browser
   clean [--volumes]   remove the VM (and optionally its caches)
 
 build options:
@@ -29,6 +32,12 @@ build options:
   --no-host-images    do not reuse Docker images from the host daemon
   --refresh-images    re-export the host images even if nothing changed
 
+port:
+  seu port                     list the active forwards
+  seu port 8080 80:80          PORT, HOST:GUEST or BIND:HOST:GUEST
+  seu port --stop 8080         drop one; --stop-all drops every forward
+  The default bind is 127.0.0.1; forwards do not survive `seu stop`.
+
 The project describes itself in .seu/config.conf (image_name, mise_config,
 maven_server, prepull). Without it, sensible defaults apply.
 
@@ -38,10 +47,15 @@ env:
   SEU_STATE_DIR=<path>    where bundles, pidfiles and staged images live
   SEU_HOST_M2=<path>      host Maven repository (default: ~/.m2/repository)
   SEU_USE_HOST_M2=0       same as --no-host-m2
+  SEU_SYNC_CLAUDE=0       do not project your Claude Code config into the VM
+  SEU_SYNC_AUTH=0         do not copy your Claude Code login into the VM
   GITHUB_ACTOR / GITHUB_TOKEN
                           fallback artifact-repository credentials, `build` only
 
 `build` reads your ~/.m2 and host Docker images; a SESSION never sees either.
+
+Every `start`/`shell` projects your ~/.claude settings, your ccstatusline layout
+and your Claude Code login into the VM, so there is nothing to set up in there.
 
 The worktree is mounted READ-ONLY at /src and cloned to /work inside the VM.
 Get work back out with `seu pull`.
@@ -51,7 +65,7 @@ USAGE
 
 cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
 case "$cmd" in
-  doctor|build|start|stop|shell|status|pull|clean)
+  doctor|build|start|stop|shell|status|pull|port|playwright|clean)
     # shellcheck source=/dev/null
     source "$SEU_ROOT/lib/cmd-$cmd.sh"; "cmd_$cmd" "$@" ;;
   -h|--help|help|"") usage ;;

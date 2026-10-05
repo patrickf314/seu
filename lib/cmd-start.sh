@@ -46,4 +46,7 @@ cmd_start() {
   step "Preparing /work"
   seu_exec 900 -u seu "$SANDBOX" -- bash -lc '/usr/local/bin/session-init.sh' \
     || warn "session-init reported a problem"
+
+  step "Claude Code configuration"
+  seu_sync_claude_config "$SANDBOX"
 }

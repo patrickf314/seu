@@ -508,3 +508,402 @@ seu_maven_server_args() {
 
 NET_PROFILE="${SEU_NET:-session}"
 seu_net_conf() { printf '%s/config/net-%s.yaml' "$SEU_ROOT" "$NET_PROFILE"; }
+
+# ------------------------------------------------------------------- host SSH
+# Port forwarding rides on `msb ssh`, not on `msb create -p`.
+#
+# `msb create` does take `-p HOST:GUEST`, but ports are fixed at CREATE time --
+# `msb modify` has no port flag at all. Using it would mean re-creating the
+# sandbox every time a port is added: root disk gone, dockerd and session-init
+# re-run, every running process killed. For "let me look at my dev server" that
+# is useless.
+#
+# microsandbox's SSH server implements the `direct-tcpip` channel and relays it
+# into the guest, so plain openssh `ssh -N -L` forwards into a RUNNING sandbox
+# with nothing restarted. `msb ssh serve --stdio <sb>` serves one SSH transport
+# over stdin/stdout, which is exactly what ProxyCommand wants.
+#
+# The key is seu's own, under the state dir -- never ~/.ssh. `msb ssh serve`
+# refuses to run without an authorized key ("SSH server has no authorized public
+# keys"), and `msb ssh authorize` is idempotent.
+SEU_SSH_DIR="${SEU_STATE_DIR:-$SEU_ROOT/.seu-state}/ssh"
+
+seu_ssh_key() {
+  local key="$SEU_SSH_DIR/id_ed25519"
+  if [[ ! -f "$key" ]]; then
+    mkdir -p "$SEU_SSH_DIR"
+    command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen not found -- seu port needs OpenSSH"
+    ssh-keygen -t ed25519 -N '' -C seu -f "$key" -q >/dev/null \
+      || die "could not generate the seu SSH key at $key"
+  fi
+  printf '%s\n' "$key"
+}
+
+seu_ssh_authorize() {
+  local key; key="$(seu_ssh_key)"
+  msb ssh authorize --file "$key.pub" >/dev/null 2>&1 \
+    || die "msb ssh authorize failed for $key.pub"
+}
+
+# openssh options, ONE ARGUMENT PER LINE (the seu_source_args idiom -- bash 3.2
+# has no mapfile). -F /dev/null so a personal ~/.ssh/config cannot redirect this.
+seu_ssh_args() {
+  local sb="$1" key; key="$(seu_ssh_key)"
+  printf -- '-F\n/dev/null\n'
+  printf -- '-i\n%s\n' "$key"
+  printf -- '-o\nIdentitiesOnly=yes\n'
+  printf -- '-o\nStrictHostKeyChecking=no\n'
+  printf -- '-o\nUserKnownHostsFile=/dev/null\n'
+  printf -- '-o\nLogLevel=ERROR\n'
+  printf -- '-o\nExitOnForwardFailure=yes\n'
+  printf -- '-o\nServerAliveInterval=30\n'
+  printf -- '-o\nProxyCommand=%s ssh serve --stdio --no-inactivity-timeout %s\n' "$MSB" "$sb"
+}
+
+# ------------------------------------------------------------ port forwarding
+# A spec is docker's: GUEST, HOST:GUEST, or BIND:HOST:GUEST. Prints
+# "<bind> <hostport> <guestport>". Validated hard -- it ends up in an `ssh -L`
+# argument, and a seu invariant is that nothing from outside is trusted.
+#
+# The default bind is 127.0.0.1, not 0.0.0.0: a forward into a sandbox should
+# not quietly publish that sandbox to the local network. Ask for `*:` to do that.
+seu_port_parse() {
+  local spec="$1" bind host guest
+  case "$spec" in
+    */udp|*/UDP) die "ssh -L forwards TCP only, so $spec is not supported" ;;
+    */tcp|*/TCP) spec="${spec%/*}" ;;
+  esac
+
+  case "$spec" in
+    *:*:*:*) die "not a usable port spec: $spec (expected PORT, HOST:GUEST or BIND:HOST:GUEST)" ;;
+    *:*:*)   bind="${spec%%:*}"; spec="${spec#*:}"; host="${spec%%:*}"; guest="${spec#*:}" ;;
+    *:*)     bind="127.0.0.1";   host="${spec%%:*}"; guest="${spec#*:}" ;;
+    *)       bind="127.0.0.1";   host="$spec";       guest="$spec" ;;
+  esac
+
+  [[ "$bind" == "*" ]] && bind="0.0.0.0"
+  [[ "$bind" == "localhost" ]] && bind="127.0.0.1"
+  [[ "$bind" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
+    || die "not a usable bind address: $bind (use an IPv4 literal, localhost or *)"
+
+  local p
+  for p in "$host" "$guest"; do
+    [[ "$p" =~ ^[0-9]{1,5}$ ]] && [[ "$p" -ge 1 ]] && [[ "$p" -le 65535 ]] \
+      || die "not a usable port: $p (1-65535)"
+  done
+
+  printf '%s %s %s\n' "$bind" "$host" "$guest"
+}
+
+# One file per forward, keyed by HOST port -- that is what is unique on the Mac.
+#   $STATE_DIR/ports/<hostport>.fwd   "<bind> <hostport> <guestport> <pid>"
+#   $STATE_DIR/ports/<hostport>.log   that tunnel's ssh stderr
+seu_port_dir() { printf '%s/ports' "$STATE_DIR"; }
+
+seu_port_pid() {
+  local f; f="$(seu_port_dir)/$1.fwd"
+  [[ -f "$f" ]] || return 1
+  awk '{print $4}' "$f"
+}
+
+seu_port_up() {
+  local pid; pid="$(seu_port_pid "$1")" || return 1
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Prints "<bind> <hostport> <guestport> <pid>" per LIVE forward, pruning the
+# records whose ssh has died (a tunnel does not survive `seu stop`).
+seu_port_list() {
+  local dir f port
+  dir="$(seu_port_dir)"
+  [[ -d "$dir" ]] || return 0
+  for f in "$dir"/*.fwd; do
+    [[ -f "$f" ]] || continue
+    port="$(basename "$f" .fwd)"
+    if seu_port_up "$port"; then cat "$f"; else rm -f "$f"; fi
+  done
+  return 0
+}
+
+# bash's own /dev/tcp rather than nc(1): no external dependency, and a missing
+# nc would otherwise make every probe answer "free", which turns the busy-port
+# guard below into a no-op and the readiness poll into a guaranteed timeout.
+seu_host_port_listening() {
+  local h="$1"
+  [[ "$h" == "0.0.0.0" ]] && h="127.0.0.1"
+  (exec 3<>"/dev/tcp/$h/$2") >/dev/null 2>&1
+}
+
+seu_port_start() {
+  local bind="$1" host="$2" guest="$3" sb="${4:-$SANDBOX}"
+  local dir log args=() i pid
+  dir="$(seu_port_dir)"; mkdir -p "$dir"
+  log="$dir/$host.log"
+
+  if seu_port_up "$host"; then
+    info "$bind:$host -> vm:$guest already forwarded"
+    return 0
+  fi
+  rm -f "$dir/$host.fwd"
+
+  # Check the host port BEFORE starting ssh. Afterwards "something is listening
+  # on $host" is ambiguous -- it could be the squatter rather than our tunnel,
+  # which is exactly how a failed bind used to get reported as a success.
+  if seu_host_port_listening "$bind" "$host"; then
+    warn "host port $host is already in use -- not forwarding to vm:$guest"
+    info "$(lsof -nP -iTCP:"$host" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print "held by "$1" (pid "$2")"}')"
+    return 1
+  fi
+
+  while IFS= read -r a; do args+=("$a"); done < <(seu_ssh_args "$sb")
+
+  : > "$log"
+  # The guest-side destination is `localhost`, NOT the 127.0.0.1 literal. A Vite
+  # dev server binds [::1] only, so an IPv4 literal finds nothing there and the
+  # forward comes up but refuses every connection. `localhost` lets the guest
+  # resolver try both families, which also reaches 127.0.0.1-only listeners
+  # (the trace viewer) and 0.0.0.0 ones (docker-proxy).
+  nohup ssh "${args[@]}" -N -L "$bind:$host:localhost:$guest" "seu@$sb" \
+    >>"$log" 2>&1 &
+  pid=$!
+  disown 2>/dev/null || true
+  printf '%s %s %s %s\n' "$bind" "$host" "$guest" "$pid" > "$dir/$host.fwd"
+
+  # ExitOnForwardFailure turns a busy host port into a clean, fast ssh exit, so
+  # a dead pid here is a real diagnosis and not just a slow start.
+  for i in $(seq 1 15); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$dir/$host.fwd"
+      warn "could not forward $bind:$host -> vm:$guest"
+      sed 's/^/    /' "$log" >&2
+      return 1
+    fi
+    if seu_host_port_listening "$bind" "$host"; then
+      # The port was free a moment ago, so a listener now is ours. Give ssh a
+      # beat to fall over anyway, then confirm it is still there.
+      sleep 1
+      kill -0 "$pid" 2>/dev/null && { ok "$bind:$host -> vm:$guest"; return 0; }
+      continue
+    fi
+    sleep 1
+  done
+
+  warn "$bind:$host -> vm:$guest: ssh is running but the port never opened"
+  sed 's/^/    /' "$log" >&2
+  return 1
+}
+
+# The log goes with the record. A tunnel that came up cleanly leaves an empty
+# one; a tunnel that failed never gets here, so its log survives to be read.
+seu_port_stop() {
+  local host="$1" dir pid
+  dir="$(seu_port_dir)"
+  pid="$(seu_port_pid "$host" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  rm -f "$dir/$host.fwd" "$dir/$host.log"
+}
+
+seu_port_stop_all() {
+  local dir f
+  dir="$(seu_port_dir)"
+  [[ -d "$dir" ]] || return 0
+  for f in "$dir"/*.fwd; do
+    [[ -f "$f" ]] || continue
+    seu_port_stop "$(basename "$f" .fwd)"
+  done
+  return 0
+}
+
+# ------------------------------------------- Claude Code configuration + auth
+# The developer configures Claude Code once, on their Mac. A VM that ignores
+# that starts every session with a fresh /login, the default status line and
+# whatever effort level the CLI ships with -- so seu projects the host's
+# configuration into the guest on every start. At START time, not into the
+# image: changing a setting then costs nothing, where a baked copy would cost a
+# full rebuild.
+#
+# Three documents go in (see lib/claude-config.py for what each one keeps):
+#
+#   settings.json   ~/.claude/settings.json with the host-only parts dropped and
+#                   vm/claude-settings.json merged ON TOP, so the sandbox's own
+#                   hardening always wins over anything the host says.
+#   ccstatusline    ~/.config/ccstatusline/settings.json, with an SEU badge
+#                   prepended so a VM shell can never be read as a host shell.
+#   .claude.json    the account/onboarding subset, MERGED into whatever the
+#                   guest already has.
+#
+# Plus the OAuth credentials, which is the one part that is a secret. All of it
+# lands on the sandbox's ROOT disk, never in the /seu volume and never in the
+# image: the root disk is re-created from the image whenever the sandbox is,
+# which is exactly the lifetime a copied credential should have.
+SEU_CLAUDE_STAGE="/tmp/seu-claude"
+
+# macOS keeps the Claude Code tokens in the login Keychain; Linux keeps them in
+# $CLAUDE_CONFIG_DIR/.credentials.json. Reading the one and writing the other is
+# the whole of "copy the authentication" -- there is no login flow to replay,
+# and `/login` inside the VM would want a browser the guest does not have.
+#
+# The first read raises a Keychain prompt. "Always Allow" and it never asks
+# again. A denied prompt is not an error: the session simply starts logged out.
+seu_keychain_credentials() {
+  security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null
+}
+
+# The guest half, passed as an ARGUMENT to python3 rather than copied in as a
+# script: nothing inside the VM can rewrite an argv between the copy and the
+# exec, and it runs as `seu`, so no part of this needs root.
+seu_claude_guest_program() {
+  cat <<'PY'
+import json, os, shutil
+
+HOME = os.path.expanduser("~")
+CFG = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
+STAGE = "/tmp/seu-claude"  # keep in step with SEU_CLAUDE_STAGE
+done = []
+
+def staged(name):
+    try:
+        with open(os.path.join(STAGE, name), encoding="utf-8") as fh:
+            value = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+def put(path, data, mode):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".seu-tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+settings = staged("settings.json")
+if settings is not None:
+    put(os.path.join(CFG, "settings.json"), settings, 0o644)
+    done.append("settings")
+
+statusline = staged("ccstatusline.json")
+if statusline is not None:
+    put(os.path.join(HOME, ".config", "ccstatusline", "settings.json"), statusline, 0o644)
+    done.append("statusline")
+
+identity = staged("identity.json")
+if identity is not None:
+    # MERGED, never replaced: .claude.json is also where Claude keeps this VM's
+    # own per-directory state, and overwriting it would throw away the history
+    # behind `claude --continue`. Written to both locations because which one is
+    # authoritative depends on whether CLAUDE_CONFIG_DIR is honoured for it.
+    for path in (os.path.join(CFG, ".claude.json"), os.path.join(HOME, ".claude.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                current = json.load(fh)
+        except (OSError, ValueError):
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        current.update(identity)
+        put(path, current, 0o600)
+    done.append("identity")
+
+credentials = staged("credentials.json")
+if credentials is not None:
+    def expiry(blob):
+        try:
+            return int(blob["claudeAiOauth"]["expiresAt"])
+        except (KeyError, TypeError, ValueError):
+            return 0
+    path = os.path.join(CFG, ".credentials.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            current = json.load(fh)
+    except (OSError, ValueError):
+        current = None
+    # Host and guest refresh their tokens independently, so by the second start
+    # the guest's copy may well be the fresher one. Keep whichever lives longest
+    # instead of clobbering a working session with a stale Keychain blob.
+    if current is None or expiry(credentials) > expiry(current):
+        put(path, credentials, 0o600)
+        done.append("credentials")
+    else:
+        done.append("credentials (kept the guest's newer token)")
+
+shutil.rmtree(STAGE, ignore_errors=True)
+print(", ".join(done) if done else "nothing to sync")
+PY
+}
+
+seu_sync_claude_config() {
+  local sb="$1"
+
+  if [[ "${SEU_SYNC_CLAUDE:-1}" != "1" ]]; then
+    info "SEU_SYNC_CLAUDE=0 -- the VM keeps the image's own Claude config"
+    return 0
+  fi
+
+  local stage="$STATE_DIR/claude" py="$SEU_ROOT/lib/claude-config.py"
+  rm -rf "$stage"
+  (umask 077 && mkdir -p "$stage") || { warn "could not stage the Claude config"; return 0; }
+
+  # A broken host config must not take the session down with it: every step
+  # below degrades to "the image's own default stays in place".
+  local staged=()
+  if python3 "$py" settings \
+       --host "$HOME/.claude/settings.json" \
+       --base "$SEU_ROOT/vm/claude-settings.json" > "$stage/settings.json"; then
+    staged+=(settings.json)
+  else
+    warn "could not build the in-VM settings.json; the image default stays"
+  fi
+
+  if python3 "$py" statusline \
+       --host "$HOME/.config/ccstatusline/settings.json" \
+       --label "SEU $PROJECT_NAME" > "$stage/ccstatusline.json"; then
+    staged+=(ccstatusline.json)
+  else
+    warn "could not build the ccstatusline config"
+  fi
+
+  if python3 "$py" identity --host "$HOME/.claude.json" > "$stage/identity.json"; then
+    staged+=(identity.json)
+  else
+    warn "could not build the Claude identity"
+  fi
+
+  if [[ "${SEU_SYNC_AUTH:-1}" != "1" ]]; then
+    info "SEU_SYNC_AUTH=0 -- no credentials copied; run /login inside the VM"
+  elif seu_keychain_credentials > "$stage/credentials.json" 2>/dev/null \
+       && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$stage/credentials.json" 2>/dev/null; then
+    staged+=(credentials.json)
+  else
+    rm -f "$stage/credentials.json"
+    warn "no Claude Code credentials in the login Keychain -- run /login inside the VM"
+  fi
+
+  if [[ ${#staged[@]} -eq 0 ]]; then
+    rm -rf "$stage"
+    return 0
+  fi
+
+  # 0700, because the staging copies are briefly world-readable: `msb copy` sets
+  # the mode, and the guest program is what tightens the destinations to 0600.
+  seu_exec 30 -u seu "$sb" -- sh -c \
+    "rm -rf '$SEU_CLAUDE_STAGE' && mkdir -m 700 -p '$SEU_CLAUDE_STAGE'" >/dev/null 2>&1 \
+    || { warn "could not prepare the Claude config staging directory in the VM"; rm -rf "$stage"; return 0; }
+
+  local f
+  for f in "${staged[@]}"; do
+    msb copy "$stage/$f" "$sb:$SEU_CLAUDE_STAGE/$f" >/dev/null 2>&1 \
+      || warn "could not copy $f into the VM"
+  done
+  # The host copies exist only for the length of this function. The secret is in
+  # the VM now and in the Keychain, and nowhere else on disk.
+  rm -rf "$stage"
+
+  local applied
+  if applied="$(seu_exec 60 -u seu "$sb" -- python3 -c "$(seu_claude_guest_program)" 2>&1)"; then
+    ok "claude config: $(printf '%s' "$applied" | tail -1)"
+  else
+    warn "could not apply the Claude config in the VM"
+    printf '%s\n' "$applied" | sed 's/^/    /' >&2
+  fi
+}
