@@ -10,7 +10,7 @@ Built on [microsandbox](https://docs.microsandbox.dev) (libkrun +
 Hypervisor.framework). Each session is a real VM with its own Linux kernel.
 
 Grew out of one project and is being generalized: what is repository-specific
-now lives in a `.seu/config.conf` profile inside that repository. The warm-up
+now lives in a `.seu/config.json` profile inside that repository. The warm-up
 (`vm/warm.sh`) and the base image are still Maven/Node-shaped — that is the next
 piece to move out.
 
@@ -18,6 +18,9 @@ piece to move out.
 
 - macOS on Apple Silicon (microsandbox does not support Intel)
 - `msb` (microsandbox) installed at `~/.microsandbox/bin/msb`
+- Node 22+. `seu help` runs with nothing installed; `seu build` needs the
+  microsandbox SDK, which `npm install` (in a checkout) or the package's own
+  dependency (when installed) provides
 - Docker on the host — for `seu build` only; sessions never touch it
 - Artifact-repository credentials for whatever the project needs, either in
   `~/.m2/settings.xml` or as `GITHUB_ACTOR` / `GITHUB_TOKEN`
@@ -62,40 +65,101 @@ Inside the VM:
 
 ## The project profile
 
-What is specific to one repository lives in `.seu/config.conf` **in that
+What is specific to one repository lives in `.seu/config.json` **in that
 repository**, not in seu:
 
-```ini
-image_name  = seu-vm-website-react     # default: seu-vm-<worktree-name>
-mise_config = mise.toml                # optional; copied into the base image
-
-maven_server = devx-repository         # repeatable
-maven_server = ui-test-components-repository
-
-prepull = postgres:18                  # repeatable
-prepull = nginx:latest
+```json
+{
+  "image": {
+    "tag": "website-react",
+    "mise-toml": "./mise.toml"
+  }
+}
 ```
 
-`key = value`, one per line, `#` for a full-line comment, a repeated key builds
-a list. seu **parses** this file with awk — it never sources or evaluates it, and
-every value that reaches a host command is validated first. The repository seu
-sandboxes is not a repository seu trusts.
+Both keys are optional, and so is the file:
 
-Every key is optional. Without the file a project still builds; it just gets no
-prepulled images and no managed toolchain. `seu doctor` prints what it resolved
-and warns about keys it does not recognise.
+| key | default | what it does |
+| --- | --- | --- |
+| `image.tag` | the worktree's directory name | base-image repository name, so two repositories never share (and invalidate) each other's image. The hash of the image inputs is appended to it. |
+| `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
 
-`examples/website-react.config.conf` is the profile for the project this grew out
-of.
+The file is **data, never code**: it is parsed as JSON and validated against a
+[zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches
+a host command, and unknown keys are rejected rather than ignored — a typo that
+silently produced a toolchain-less image is exactly the failure this prevents.
+The repository seu sandboxes is not a repository seu trusts.
+
+`examples/website-react.config.json` is the profile for the project this grew
+out of.
+
+> **In flux.** This format replaced a `key = value` profile that also carried
+> `maven_server`, `prepull`, `warm_artifact`, `playwright_pom` and
+> `playwright_browser`. Those keys are gone for now, and with them: Maven
+> repository credentials, host-image staging into the build sandbox, explicit
+> artifact warming and the Playwright browser download (`seu playwright trace`
+> is disabled). The old format and its code are in git history, to come back
+> key by key.
+
+## Two halves: TypeScript and bash
+
+### Running it
+
+```bash
+npx seu help              # installed package: runs dist/cli.js
+./bin/seu help            # a checkout: runs src/ through Node's type stripping
+npm run build             # bundle src/ -> dist/cli.js (vite)
+```
+
+`npm run build` is only needed for the installed form; a checkout runs the
+TypeScript directly, so an edit takes effect immediately. The bundle inlines
+everything except **microsandbox** — a native addon with a per-platform
+runtime, which cannot be inlined. `src/microsandbox/microsandboxSdk.ts` imports it lazily, so `seu help`
+works with no `node_modules` at all and a command that does need it fails with
+one sentence instead of a resolution stack trace. `lib/`, `vm/` and `config/`
+stay on disk and are found through `SEU_ROOT`, which is located by walking up
+to the directory holding `vm/Dockerfile` — the same code works from `src/`,
+from `dist/cli.js` and from a split chunk.
+
+### Two halves
+
+`bin/seu` is a launcher: it execs `src/cli.ts`, and every command — ported or
+not — is a `Command` const in `src/cmd/` carrying its own documentation and its
+own `run`. `build` runs here and talks to microsandbox through the **npm SDK**
+(`microsandbox`); the others still shell out to `lib/cmd-<name>.sh` and the
+**`msb` CLI** from inside their `run` (`src/cmd/bash.ts`). Porting one means
+replacing that `run`; the registry, the dispatcher and `seu help` do not
+change.
+
+Both halves share `vm/`, `config/`, `lib/*.py` and — crucially — one
+microsandbox home, so a sandbox, volume or image created by one is the same
+object for the other.
+
+That shared home is also the trap: **the SDK and the CLI must be the same
+version.** They share `~/.microsandbox/db/msb.db`, and the SDK migrates its
+schema; an older CLI then refuses every command with *"database schema is newer
+than this msb binary"*. `seu build` warns when the two drift apart. The fix is
+to install the SDK's own binary over the CLI:
+
+```bash
+cp node_modules/@superradcompany/microsandbox-darwin-arm64/bin/msb ~/.microsandbox/bin/msb
+cp node_modules/@superradcompany/microsandbox-darwin-arm64/lib/libkrunfw.*.dylib ~/.microsandbox/lib/
+```
+
+The SDK itself refuses to launch a sandbox with a runtime it did not ship (*"no
+tested sandbox launch contract for runtime X"*), even at a matching version, so
+`src/runtime.ts` points it at the binary inside its own platform package while
+leaving `MSB_HOME` alone.
 
 ## How `seu build` works, and why it is two sandboxes
 
 The session must have almost no network. The warm-up needs a lot of it. And
-**`msb modify` cannot change a sandbox's network policy** — so one sandbox
-cannot be both.
+**a sandbox's network policy cannot be changed after creation** — so one
+sandbox cannot be both.
 
-`seu build` therefore creates a *throwaway* build sandbox with wide egress
-(`config/net-build.yaml`), fills four **named volumes**, and destroys it. The
+`seu build` therefore creates a *throwaway* build sandbox with wide egress (the
+allowlist in `src/network/net.ts`; `config/net-build.yaml` is the bash half's copy),
+fills four **named volumes**, and destroys it. The
 session sandbox is then created with the locked-down profile
 (`config/net-session.yaml`) and mounts those same volumes.
 
@@ -610,7 +674,7 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
 - `docker save` now writes an **OCI archive** (`blobs/sha256/`, `index.json`),
   not the old layout. It still carries `manifest.json` with `RepoTags`, so
   `docker load` restores the tags and `docker image inspect <ref>` finds them.
-- The host's project-specific bits live in `<project>/.seu/config.conf` and are
+- The host's project-specific bits live in `<project>/.seu/config.json` and are
   **parsed, never sourced**. Keep it that way: the whole point of seu is that the
   repository is not trusted, and a sourced config would hand it your Mac.
 - **`msb create -p HOST:GUEST` exists, but ports are fixed at create time.**
@@ -646,27 +710,45 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
 ## Layout
 
 ```
-bin/seu                     dispatcher
-lib/common.sh               identity, profile parsing, volumes, host mounts,
-                            host-image export, dockerd supervision,
-                            SSH plumbing, the port-forward registry and the
+bin/seu                     launcher: execs src/cli.ts
+src/cli.ts                  dispatcher: finds the command, runs it
+   cmd/index.ts             the command registry
+   cmd/command.ts           what a Command is: docs + run
+   cmd/bash.ts              run for a command still backed by lib/cmd-*.sh
+   cmd/build.ts             the build flow (the one ported command)
+   cmd/<name>.ts            one file per command: its docs, and its run
+   cmd/help.ts              renders what the others declare
+   config/config.ts         the zod-validated project profile
+   common/log.ts            console output
+   common/error.ts          SeuError and die()
+   sandbox.ts               volume layout, bounded execs, dockerd
+   runtime.ts               which msb binary the SDK drives
+   image.ts                 base-image hash, docker build, image import
+   project.ts               project identity
+   net.ts                   build-phase egress allowlist
+   host.ts  maven.ts        host processes; the generated in-VM settings.xml
+lib/common.sh               identity, volumes, dockerd supervision, SSH
+                            plumbing, the port-forward registry and the
                             Claude config/credential sync
     cmd-*.sh                one file per command
-    maven-settings.py       generates the in-VM settings.xml; extracts credentials
+    conf-get.py             reads one key out of .seu/config.json, for bash
+    maven-settings.py       generates the in-VM settings.xml
     claude-config.py        projects your ~/.claude setup onto the VM
-vm/Dockerfile               base image: toolchain + docker + Claude Code + ccstatusline
+vm/Dockerfile               base image (FROM jdxcode/mise:debian): toolchain +
+                            docker + Claude Code + ccstatusline
    dockerd-run.sh           foreground dockerd (see notes above)
    session-init.sh          clone /src -> /work
    warm.sh                  the whole `seu build` warm-up
    claude-settings.json     the VM's own Claude settings, merged ON TOP of yours
 config/net-session.yaml     Anthropic-only egress
-       net-build.yaml       wide egress, build phase only
+       net-build.yaml       wide egress, build phase only (bash half; the
+                            TypeScript build uses src/net.ts)
        resources.yaml       cpus / memory / idle timeout
-examples/                   a real .seu/config.conf to copy into a project
+examples/                   a real .seu/config.json to copy into a project
 .seu-state/                 git bundles, dockerd pidfiles, staged host images,
                             per-forward pidfiles under <slug>/ports/
                             (gitignored; override with SEU_STATE_DIR)
            ssh/             seu's own SSH key, shared by every project
 
-<project>/.seu/config.conf  the per-project profile (see above)
+<project>/.seu/config.json  the per-project profile (see above)
 ```

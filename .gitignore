@@ -1,1 +1,3 @@
 .seu-state/
+node_modules/
+dist/

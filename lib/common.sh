@@ -94,161 +94,53 @@ seu_resolve_project() {
   STATE_DIR="${SEU_STATE_DIR:-$SEU_ROOT/.seu-state}/$SLUG"
   mkdir -p "$STATE_DIR"
 
-  SEU_CONF_FILE="$PROJECT/.seu/config.conf"
+  SEU_CONF_FILE="$PROJECT/.seu/config.json"
 }
 
 # ------------------------------------------------------------- project profile
-# `.seu/config.conf` in the project describes what this particular repository
-# needs: the base-image name, which Maven servers it authenticates against, and
-# which Docker images to have ready. It is DATA, never code -- seu is meant to
-# distrust the repository it sandboxes, so the file is parsed with awk and no
-# value is ever eval'd, sourced or word-split into a command.
+# `.seu/config.json` in the project describes what this particular repository
+# needs. It is DATA, never code -- seu is meant to distrust the repository it
+# sandboxes, so no value is ever eval'd, sourced or word-split into a command.
 #
-# Format: `key = value`, one per line, `#` starts a full-line comment.
-# A repeated key is how a list is written; order is preserved.
-# One line: this is passed to awk with -v, which rejects an embedded newline.
-SEU_CONF_KNOWN_KEYS="image_name mise_config maven_server prepull warm_artifact playwright_pom playwright_browser"
-
-seu_conf_all() {
-  [[ -n "${SEU_CONF_FILE:-}" && -f "$SEU_CONF_FILE" ]] || return 0
-  awk -v want="$1" '
-    /^[[:space:]]*#/ { next }
-    {
-      eq = index($0, "=")
-      if (eq == 0) next
-      k = substr($0, 1, eq - 1); v = substr($0, eq + 1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-      if (k == want && v != "") print v
-    }
-  ' "$SEU_CONF_FILE"
+# The schema lives in src/config/config.ts (zod) and is the authority; this is
+# the read-only half the bash commands need, so `seu start` derives the SAME
+# image tag as the TypeScript `seu build`. Only `image.tag` and
+# `image.mise-toml` exist today.
+#
+# Read with python3 rather than awk or jq: the format is JSON now, jq is not on
+# every Mac, and python3 is already a hard dependency (maven-settings.py).
+seu_conf_json() {
+  local path="$1" default="${2:-}"
+  [[ -n "${SEU_CONF_FILE:-}" && -f "$SEU_CONF_FILE" ]] || { printf '%s\n' "$default"; return 0; }
+  python3 "$SEU_ROOT/lib/conf-get.py" "$SEU_CONF_FILE" "$path" "$default" \
+    || die "$SEU_CONF_FILE is not a usable profile"
 }
 
-# Last value wins, so a later line can override an earlier one.
-seu_conf() {
-  local v; v="$(seu_conf_all "$1" | tail -1)"
-  printf '%s\n' "${v:-${2:-}}"
+# Base image repository name. Projects override it so two repositories never
+# share (and invalidate) each other's image; the default is the worktree's own
+# directory name.
+seu_image_name() {
+  local n; n="$(seu_conf_json image.tag "")"
+  if [[ -z "$n" ]]; then
+    n="$(printf '%s' "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
+  fi
+  [[ "$n" =~ ^[a-z0-9][a-z0-9._/-]*$ ]] \
+    || die "$SEU_CONF_FILE: image.tag must be a lowercase docker repository name: $n"
+  printf '%s\n' "$n"
 }
 
-# Keys we do not understand are almost always typos. Report, never fail.
-seu_conf_unknown_keys() {
-  [[ -n "${SEU_CONF_FILE:-}" && -f "$SEU_CONF_FILE" ]] || return 0
-  awk -v known=" $SEU_CONF_KNOWN_KEYS " '
-    /^[[:space:]]*#/ { next }
-    {
-      eq = index($0, "=")
-      if (eq == 0) next
-      k = substr($0, 1, eq - 1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
-      if (k != "" && index(known, " " k " ") == 0) print k
-    }
-  ' "$SEU_CONF_FILE" | sort -u
-}
-
-# Everything below is handed to a command ON THE HOST, so validate hard.
-seu_valid_image_ref() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]; }
-
-# Artifacts to resolve properly during the warm-up, as `groupId:artifactId:version`.
-#
-# This covers two things a file copy cannot. First, descriptors: an artifact's
-# parent POMs usually live under other artifactId directories, and Maven cannot
-# read a descriptor without the whole chain -- copying
-# org/codehaus/plexus/plexus-java/1.5.2 yields "Failed to read artifact
-# descriptor" because plexus-languages and plexus did not come along. Second,
-# artifacts nothing declares: surefire and failsafe pick their provider jar
-# (org.apache.maven.surefire:surefire-junit-platform) from the test framework
-# they detect, so no pre-fetch goal ever asks for it -- but naming it here does.
-#
-# The usual case is a plugin invoked from the COMMAND LINE rather than bound in
-# the POM (`default-cli` in the error message). Nothing in the warm-up can know
-# about it, so `dependency:go-offline` and `dependency:resolve-plugins` skip it.
-# Playwright downloads its browsers per platform, so the host's copies are
-# useless here -- they are macOS builds and the guest needs linux-arm64. They
-# must be fetched during `seu build`, into ~/.cache/ms-playwright, which is in the
-# persistent volume. A browser not listed here is simply absent in the session,
-# and the test that wants it fails with ENOTFOUND at the worst possible moment.
-seu_playwright_browsers() {
-  local b out=""
-  while IFS= read -r b; do
-    [[ -n "$b" ]] || continue
-    [[ "$b" =~ ^[a-z][a-z0-9-]*$ ]] \
-      || die "$SEU_CONF_FILE: not a usable Playwright browser name: $b"
-    out="${out:+$out }$b"
-  done < <(seu_conf_all playwright_browser)
-  printf '%s\n' "${out:-chromium}"
-}
-
-# The module whose pom puts the Playwright Java client on the classpath, which is
-# all `exec:java -Dexec.mainClass=com.microsoft.playwright.CLI` needs.
-#
-# Stated explicitly, never guessed. Searching the poms for the dependency looks
-# attractive but misses the case where it is inherited from a parent or a BOM, and
-# the failure mode is silence followed by an ENOTFOUND at test time, in a session
-# that can no longer fix it. `playwright_browser` without this key is an error.
-#
-# Setting this key is what enables the step at all; a project with no Playwright
-# simply omits it.
-seu_playwright_pom() { seu_conf_relpath playwright_pom; }
-
-# Project-relative path, validated and returned AS relative: the host checks it
-# against $PROJECT, the VM resolves it against /work.
-seu_conf_relpath() {
-  local key="$1" v
-  v="$(seu_conf "$key" "")"
-  [[ -n "$v" ]] || return 1
+# The mise toolchain file as an ABSOLUTE path; non-zero when the project has
+# none. Optional: a project without one still gets a VM, just without a
+# mise-managed JDK/Maven.
+seu_mise_config() {
+  local v; v="$(seu_conf_json image.mise-toml "./mise.toml")"
+  v="${v#./}"
   case "$v" in
-    /*)   die "$SEU_CONF_FILE: $key must be relative to the project: $v" ;;
-    *..*) die "$SEU_CONF_FILE: $key must not contain '..': $v" ;;
-  esac
-  [[ "$v" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
-    || die "$SEU_CONF_FILE: not a usable path: $key = $v"
-  [[ -f "$PROJECT/$v" ]] || { warn "$SEU_CONF_FILE: $key points at $v, which does not exist"; return 1; }
-  printf '%s\n' "$v"
-}
-
-seu_warm_artifacts() {
-  local a
-  while IFS= read -r a; do
-    [[ -n "$a" ]] || continue
-    case "$a" in
-      *:*:*) : ;;
-      *) die "$SEU_CONF_FILE: warm_artifact needs groupId:artifactId:version: $a" ;;
-    esac
-    [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
-      || die "$SEU_CONF_FILE: not a usable artifact coordinate: $a"
-    printf '%s\n' "$a"
-  done < <(seu_conf_all warm_artifact)
-  return 0
-}
-
-# A path-valued key must stay inside the project. Prints the absolute path, or
-# returns non-zero when unset or absent.
-seu_conf_project_file() {
-  local key="$1" v
-  v="$(seu_conf "$key" "")"
-  [[ -n "$v" ]] || return 1
-  case "$v" in
-    /*)    die "$SEU_CONF_FILE: $key must be relative to the project: $v" ;;
-    *..*)  die "$SEU_CONF_FILE: $key must not contain '..': $v" ;;
+    /*)   die "$SEU_CONF_FILE: image.mise-toml must be relative to the project: $v" ;;
+    *..*) die "$SEU_CONF_FILE: image.mise-toml must not contain '..': $v" ;;
   esac
   [[ -f "$PROJECT/$v" ]] || return 1
   printf '%s\n' "$PROJECT/$v"
-}
-
-# The mise toolchain file is optional: a project without one still gets a VM,
-# just without a mise-managed JDK/Maven.
-seu_mise_config() {
-  local v configured
-  if v="$(seu_conf_project_file mise_config)"; then printf '%s\n' "$v"; return 0; fi
-  configured="$(seu_conf mise_config "")"
-  if [[ -n "$configured" ]]; then
-    # Configured but absent is a typo, not a project without a toolchain, and it
-    # would otherwise produce a silently JDK-less image.
-    warn "$SEU_CONF_FILE: mise_config points at $configured, which does not exist"
-    return 1
-  fi
-  [[ -f "$PROJECT/mise.toml" ]] && { printf '%s\n' "$PROJECT/mise.toml"; return 0; }
-  return 1
 }
 
 # ------------------------------------------------------------------------ volumes
@@ -370,20 +262,6 @@ seu_stop_dockerd() {
 }
 
 # --------------------------------------------------------------------- misc
-# Base image name. Projects override it so two repositories never share (and
-# invalidate) each other's image; the default is derived from the worktree.
-seu_image_name() {
-  local n; n="$(seu_conf image_name "")"
-  if [[ -n "$n" ]]; then
-    [[ "$n" =~ ^[a-z0-9][a-z0-9._/-]*$ ]] \
-      || die "$SEU_CONF_FILE: image_name must be a lowercase docker repository name: $n"
-    printf '%s\n' "$n"
-  else
-    printf 'seu-vm-%s\n' \
-      "$(printf '%s' "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
-  fi
-}
-
 # Hash of everything that goes into the base image, so `build` can skip a rebuild.
 # Only files that actually exist are hashed: a project without a mise config is
 # legitimate, and the old unconditional `cat .../mise.toml` failed silently into
@@ -391,8 +269,7 @@ seu_image_name() {
 seu_image_tag() {
   local files h mise
   files=("$SEU_ROOT/vm/Dockerfile" "$SEU_ROOT/vm/dockerd-run.sh" \
-         "$SEU_ROOT/vm/session-init.sh" "$SEU_ROOT/vm/warm.sh" \
-         "$SEU_ROOT/vm/claude-settings.json")
+         "$SEU_ROOT/vm/session-init.sh" "$SEU_ROOT/vm/claude-settings.json")
   if mise="$(seu_mise_config)"; then files+=("$mise"); fi
   h="$(cat "${files[@]}" | shasum -a 256 | cut -c1-12)" || die "could not hash the image inputs"
   printf '%s:%s' "$(seu_image_name)" "$h"
@@ -418,93 +295,6 @@ seu_image_loaded() {
 # It is mounted into the BUILD sandbox only. cmd-start.sh must never use this.
 SEU_HOST_M2="${SEU_HOST_M2:-$HOME/.m2/repository}"
 SEU_HOST_M2_MOUNT="/host-m2"
-SEU_HOST_IMAGES_MOUNT="/host-images"
-
-seu_host_images_dir() { printf '%s/host-images' "$STATE_DIR"; }
-seu_host_images_tar() { printf '%s/host-images/images.tar' "$STATE_DIR"; }
-
-# Mounts that exist ONLY while `seu build` runs. Emits one argument per line.
-seu_build_mount_args() {
-  local p
-  if [[ "${SEU_USE_HOST_M2:-1}" == "1" && -d "$SEU_HOST_M2" ]]; then
-    p="$(cd "$SEU_HOST_M2" && pwd -P)"
-    printf -- '-v\n%s:%s:ro,uid=1000,gid=1000\n' "$p" "$SEU_HOST_M2_MOUNT"
-  fi
-  if [[ -f "$(seu_host_images_tar)" ]]; then
-    p="$(cd "$(seu_host_images_dir)" && pwd -P)"
-    printf -- '-v\n%s:%s:ro,uid=1000,gid=1000\n' "$p" "$SEU_HOST_IMAGES_MOUNT"
-  fi
-  return 0
-}
-
-# ----------------------------------------------------------- host Docker images
-# `docker save` the `prepull` images the host already has into ONE tar (shared
-# layers are then stored once) for the build sandbox to `docker load`. Saves the
-# whole pull phase on every rebuild.
-#
-# The architecture check is not optional. Loading an amd64 image into the arm64
-# guest reproduces exactly the "exec format error" the README documents for
-# half-pulled images: the container's architecture looks perfectly correct right
-# up until its entrypoint fails to exec.
-seu_export_host_images() {
-  local refresh="${1:-0}" dir tar idsfile img meta arch manifest
-  dir="$(seu_host_images_dir)"; tar="$dir/images.tar"; idsfile="$dir/images.ids"
-  mkdir -p "$dir"
-
-  local refs=() ids=()
-  while IFS= read -r img; do
-    [[ -n "$img" ]] || continue
-    seu_valid_image_ref "$img" \
-      || die "$SEU_CONF_FILE: not a usable image reference: $img"
-    if ! meta="$(docker image inspect --format '{{.Id}} {{.Architecture}}/{{.Os}}' "$img" 2>/dev/null)"; then
-      info "$img -- not on the host; the warm-up will pull it"
-      continue
-    fi
-    arch="${meta#* }"
-    if [[ "$arch" != "arm64/linux" ]]; then
-      warn "$img is $arch, not arm64/linux -- skipped (loading it would break the VM)"
-      continue
-    fi
-    refs+=("$img"); ids+=("${meta%% *}")
-  done < <(seu_conf_all prepull)
-
-  if [[ ${#refs[@]} -eq 0 ]]; then
-    info "no host images to reuse"
-    rm -f "$tar" "$idsfile"
-    return 0
-  fi
-
-  manifest="$(printf '%s\n' "${ids[@]}" | sort)"
-  if [[ "$refresh" != "1" && -f "$tar" && -f "$idsfile" ]] \
-     && [[ "$manifest" == "$(cat "$idsfile")" ]]; then
-    ok "${#refs[@]} host image(s) already staged ($(du -h "$tar" | awk '{print $1}'))"
-    return 0
-  fi
-
-  info "saving ${#refs[@]} host image(s) -- this reads from the host Docker daemon"
-  rm -f "$idsfile"
-  docker save -o "$tar.tmp" "${refs[@]}" \
-    || { rm -f "$tar.tmp"; die "docker save failed for: ${refs[*]}"; }
-  mv "$tar.tmp" "$tar"
-  printf '%s\n' "$manifest" > "$idsfile"
-  ok "staged $(du -h "$tar" | awk '{print $1}') of host images"
-}
-
-# ------------------------------------------------------------ Maven credentials
-# Credentials for the servers named by `maven_server` in the project profile.
-# They are read from ~/.m2/settings.xml (or GITHUB_ACTOR/GITHUB_TOKEN as a
-# fallback) and emitted as SEU_MVN_<ID>_USER / _PASS assignments which cmd-build
-# passes to the warm-up through `msb exec -e`. The generated in-VM settings.xml
-# only ever contains ${env.*} placeholders, so no secret is written to disk
-# inside the VM -- and the session sandbox is created without any of them.
-seu_maven_server_args() {
-  local id
-  while IFS= read -r id; do
-    [[ -n "$id" ]] || continue
-    printf -- '--server\n%s\n' "$id"
-  done < <(seu_conf_all maven_server)
-  return 0
-}
 
 NET_PROFILE="${SEU_NET:-session}"
 seu_net_conf() { printf '%s/config/net-%s.yaml' "$SEU_ROOT" "$NET_PROFILE"; }

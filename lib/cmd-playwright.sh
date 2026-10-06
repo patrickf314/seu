@@ -29,8 +29,9 @@ Starts Playwright's trace viewer in the VM, forwards its port to your Mac and
 opens it in your browser. The trace file itself stays in the sandbox. Ctrl-C
 stops the viewer and drops the forward.
 
-Needs `playwright_pom` in .seu/config.conf -- the viewer ships inside the
-Playwright jar, and that module's pom is what puts it on the classpath.
+DISABLED for now: the viewer ships inside the Playwright jar and seu has to be
+told which module's pom puts it on the classpath. That was `playwright_pom` in
+the old profile format; the JSON profile only knows `image` so far.
 USAGE
   exit 2
 }
@@ -70,11 +71,13 @@ seu_pw_trace() {
   seu_exec 30 -u seu "$SANDBOX" -- test -f "/work/$rel" >/dev/null 2>&1 \
     || die "no such file in the VM: /work/$rel"
 
-  local pom
-  pom="$(seu_playwright_pom)" || die "this project has no playwright_pom in .seu/config.conf.
-    The trace viewer ships inside the Playwright jar, so seu needs the module
-    whose pom puts com.microsoft.playwright on the classpath, e.g.
-        playwright_pom = club/club-ui/club-ui-test/pom.xml"
+  # The profile format moved to .seu/config.json, which only knows `image` so
+  # far. Until a key names the module again, there is no way to find the jar
+  # the trace viewer lives in -- and `seu build` no longer downloads browsers
+  # either, so a trace could not be produced in the VM to begin with.
+  local pom=""
+  die "the trace viewer needs a Playwright module, and the JSON profile cannot
+    name one yet (the old \`playwright_pom\` key is in git history)"
 
   # Same port inside and out when we can -- it makes the logs readable.
   if [[ -n "$hport" ]]; then
