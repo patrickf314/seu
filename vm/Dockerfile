@@ -110,6 +110,7 @@ ENV PATH=/mise/shims:$PATH \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
-    LANG=en_US.UTF-8
+    LANG=en_US.UTF-8 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 CMD ["/bin/bash", "--login"]

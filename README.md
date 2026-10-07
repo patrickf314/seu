@@ -162,7 +162,8 @@ Every key is optional, and so is the file:
 | `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
 | `image.pre-install` | nothing | what `seu start` fetches into the template volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
 | `install.script` | nothing | what `seu start` runs in the template's `/work` to make the checkout buildable. See below. |
-| `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright trace` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
+| `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
+| `secrets` | nothing | env vars for the session shell, as 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
 [zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches
@@ -171,6 +172,36 @@ silently produced a toolchain-less image is exactly the failure this prevents.
 The repository seu sandboxes is not a repository seu trusts. The one exception is
 `install.script`, which is a command by design — and which therefore never
 reaches the host at all.
+
+### Secrets from 1Password
+
+`secrets` maps environment variable names to
+[1Password secret references](https://developer.1password.com/docs/cli/secret-references/)
+— never to values, so nothing secret is committed with the profile:
+
+```json
+{
+  "secrets": {
+    "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential"
+  }
+}
+```
+
+Every `seu start` and `seu shell` resolves them on the host with `op read`
+(the [1Password CLI](https://developer.1password.com/docs/cli/), signed in or
+unlocked through the desktop app) and passes them to that one shell's
+environment. They are never written into the sandbox, its volume or its config:
+a stopped session holds nothing, and a rotated item is picked up by the next
+shell. A reference that cannot be read is a warning, and the shell starts
+without it.
+
+For Claude Code, `claude setup-token` on the host prints a long-lived OAuth
+token to store in 1Password; `CLAUDE_CODE_OAUTH_TOKEN` then takes precedence
+over the copied login. Unlike that login, an environment variable **is**
+readable by anything in the shell — Claude included.
+
+The profile comes from the repository, so every reference it resolves is
+printed: which of your 1Password items a repository asks for is yours to see.
 
 ### `install.script`, and why the session is not the one running it
 
@@ -459,7 +490,7 @@ the install step cannot reach a session unnoticed.
 ### Playwright traces
 
 ```bash
-seu playwright trace club/club-ui/club-ui-test/target/trace.zip
+seu playwright club/club-ui/club-ui-test/target/trace.zip
 ```
 
 The path is relative to `/work` (a leading `/work/` is accepted). This starts
@@ -474,14 +505,16 @@ node, no `npx` and no network, which also means there is no copy of the trace
 sitting around on the host afterwards.
 
 The viewer ships inside the Playwright jar, so it is started with
-`mvn -o exec:java` through the module whose pom puts that jar on the classpath:
+`mvn -o exec:java` through the module whose pom puts that jar on the classpath. To name it explicitly:
 
 ```json
 { "playwright": { "pom": "club/club-ui/club-ui-test/pom.xml" } }
 ```
 
-`--pom` overrides it. A project without either gets a clear error rather than a
-confusing Maven failure. It runs offline, so the exec plugin and Playwright must
+`--pom` overrides it. With neither, seu takes the nearest `pom.xml` above the
+trace — the test module whose `target/` it was written to — and says which one
+it picked. Only when there is none does it stop, with a clear error rather than
+a confusing Maven failure. It runs offline, so the exec plugin and Playwright must
 already be in `~/.m2` — an `install.script` that builds the module sees to that.
 
 Two details worth knowing, both verified against the driver bundle rather than

@@ -8,6 +8,8 @@ import type { ExecHandle, Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type Instance, resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
+import { loadConfig } from '../../config/config.ts';
+import { resolveSecrets } from '../../config/secrets.ts';
 import { requireSession, type Session } from '../../session.ts';
 import { prepareWork, SRC_MOUNT, startDockerd, WORK_DIR } from '../../sandbox.ts';
 
@@ -30,10 +32,12 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 /**
- * Give the session a Docker daemon and hand the terminal over, until the shell
- * ends. Also how `seu start` finishes.
+ * Give the session a Docker daemon and the profile's secrets, and hand the
+ * terminal over, until the shell ends. Also how `seu start` finishes.
  */
 export async function enterShell(instance: Instance, session: Session): Promise<number> {
+    const secrets = await resolveSecrets(loadConfig(instance.project));
+
     LOG.step('Docker');
     const dockerd = await dockerDaemon(session.sandbox);
 
@@ -41,7 +45,7 @@ export async function enterShell(instance: Instance, session: Session): Promise<
 
     try {
         return await session.sandbox.attachWith('/bin/bash', (b) =>
-            b.args(['--login']).user('seu').cwd(WORK_DIR),
+            b.args(['--login']).user('seu').cwd(WORK_DIR).envs(secrets),
         );
     } finally {
         // Explicit, rather than left to process exit: the handle IS the daemon's

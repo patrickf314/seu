@@ -101,6 +101,20 @@ const PortSpec = z.union([
     z.string().regex(/^[0-9A-Za-z.*]+(:[0-9]+){0,2}(\/tcp)?$/i, 'must be a port spec, e.g. 8080 or "5173:5173"'),
 ]);
 
+const EnvName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name');
+
+/**
+ * A 1Password secret reference, `op://vault/item/[section/]field`. Only
+ * references are accepted, never values: this file is committed, and a token
+ * pasted into it would be too.
+ */
+const SecretReference = z
+    .string()
+    .regex(
+        /^op:\/\/[^/\n]+\/[^/\n]+(\/[^/\n]+){1,2}(\?[^\n]*)?$/,
+        'must be a 1Password reference, e.g. op://Private/Claude Code/credential',
+    );
+
 const SeuConfigSchema = z
     .object({
         image: z
@@ -156,6 +170,12 @@ const SeuConfigSchema = z
          * nobody has to remember them.
          */
         ports: z.array(PortSpec).optional(),
+
+        /**
+         * Environment variables for the session shell, each read from
+         * 1Password on the host every time a shell is entered.
+         */
+        secrets: z.record(EnvName, SecretReference).optional(),
     })
     .strict();
 
@@ -206,6 +226,12 @@ export interface SeuConfig {
      * names none.
      */
     readonly ports: readonly string[];
+
+    /**
+     * Env var name to 1Password reference, unresolved; empty when the project
+     * names none.
+     */
+    readonly secrets: Readonly<Record<string, string>>;
 }
 
 /**
@@ -234,6 +260,7 @@ export function loadConfig(project: Project): SeuConfig {
             pom: config.playwright?.pom?.replace(/^\.\//, ''),
         },
         ports: config.ports ?? [],
+        secrets: config.secrets ?? {},
     };
 }
 

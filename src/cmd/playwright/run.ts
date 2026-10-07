@@ -45,11 +45,7 @@ interface TraceOptions {
 }
 
 export async function run(argv: string[]): Promise<number> {
-    const [sub, ...rest] = argv;
-    if (sub !== 'trace') {
-        die(sub === undefined ? 'which subcommand? e.g. `seu playwright trace <path>`' : `unknown subcommand for playwright: ${sub}`);
-    }
-    return trace(parseTraceArgs(rest));
+    return trace(parseTraceArgs(argv));
 }
 
 function parseTraceArgs(argv: string[]): TraceOptions {
@@ -73,7 +69,7 @@ function parseTraceArgs(argv: string[]): TraceOptions {
                 opts.open = false;
                 break;
             default:
-                if (arg.startsWith('-')) die(`unknown option for playwright trace: ${arg}`);
+                if (arg.startsWith('-')) die(`unknown option for playwright: ${arg}`);
                 if (opts.trace !== undefined) die(`one trace at a time, got ${opts.trace} and ${arg}`);
                 opts.trace = guestPath(arg, 'trace');
         }
@@ -95,18 +91,25 @@ function guestPath(raw: string, what: string): string {
 }
 
 async function trace(opts: TraceOptions): Promise<number> {
-    if (opts.trace === undefined) die('which trace? e.g. `seu playwright trace club/ui/target/trace.zip`');
+    if (opts.trace === undefined) die('which trace? e.g. `seu playwright club/ui/target/trace.zip`');
 
     const project = await resolveProject();
     const instance = resolveInstance(project, opts.name);
-    const pom =
-        opts.pom ??
-        loadConfig(project).playwright.pom ??
-        die('which module has Playwright on its classpath? set playwright.pom in .seu/config.json or pass --pom');
+    const configured = opts.pom ?? loadConfig(project).playwright.pom;
 
     const session = await requireSession(instance);
     await requireFile(session.sandbox, opts.trace, 'trace');
-    await requireFile(session.sandbox, pom, 'pom');
+
+    let pom: string;
+    if (configured !== undefined) {
+        pom = configured;
+        await requireFile(session.sandbox, pom, 'pom');
+    } else {
+        pom =
+            (await guessPom(session.sandbox, opts.trace)) ??
+            die('which module has Playwright on its classpath? set playwright.pom in .seu/config.json or pass --pom');
+        LOG.info(`using ${WORK_DIR}/${pom}; pass --pom or set playwright.pom if that is the wrong module`);
+    }
 
     const port = opts.port ?? (await freePort());
     if (opts.port !== undefined && (await hostPortListening('127.0.0.1', port))) {
@@ -179,6 +182,30 @@ async function requireFile(sandbox: Sandbox, rel: string, what: string): Promise
         timeoutMs: 30_000,
     });
     if (!found.ok) die(`no such ${what} in the VM: ${WORK_DIR}/${rel}`);
+}
+
+/**
+ * The pom of the module the trace was written by: the nearest pom.xml above
+ * it. Traces land in the test module's own target/, and that module is the one
+ * with Playwright on its test classpath.
+ */
+async function guessPom(sandbox: Sandbox, trace: string): Promise<string | undefined> {
+    const found = await exec(sandbox, {
+        cmd: 'bash',
+        args: [
+            '-c',
+            'dir=$(dirname "$SEU_TRACE"); ' +
+                'while [ "$dir" != . ]; do ' +
+                '[ -f "$dir/pom.xml" ] && { echo "$dir/pom.xml"; exit 0; }; ' +
+                'dir=$(dirname "$dir"); ' +
+                'done; exit 1',
+        ],
+        user: 'seu',
+        cwd: WORK_DIR,
+        env: { SEU_TRACE: trace },
+        timeoutMs: 30_000,
+    });
+    return found.ok ? found.stdout.trim() : undefined;
 }
 
 /** The first host port in Playwright's range that nothing is listening on. */
