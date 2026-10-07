@@ -2,18 +2,19 @@
 // `help.ts` documents from here, so neither can drift from the other.
 
 import { HELP } from './help.ts';
-import { LIST } from './list.ts';
-import { PLAYWRIGHT } from './playwright.ts';
-import { PORT } from './port.ts';
-import { PULL } from './pull.ts';
-import { REMOVE } from './remove.ts';
-import { SHELL } from './shell.ts';
-import { START } from './start.ts';
-import { STOP } from './stop.ts';
+import { LIST } from './list/index.ts';
+import { PLAYWRIGHT } from './playwright/index.ts';
+import { PORT } from './port/index.ts';
+import { PULL } from './pull/index.ts';
+import { REMOVE } from './remove/index.ts';
+import { SHELL } from './shell/index.ts';
+import { START } from './start/index.ts';
+import { STOP } from './stop/index.ts';
 import type { Command } from './command.ts';
 
 /**
- * Listed in the order `seu help` prints them: the lifecycle, then the rest.
+ * List of all commands.
+ * `seu help` prints them in the specified order
  */
 export const COMMANDS: readonly Command[] = [
     START,

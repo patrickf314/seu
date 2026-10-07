@@ -1,6 +1,6 @@
 // `seu playwright`. The flow itself lives in src/cmd/playwright/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const PLAYWRIGHT: Command = {
     name: 'playwright',
@@ -32,7 +32,7 @@ The forward is an ordinary \`seu port\` forward while it lasts. Ctrl-C stops the
     async run(argv: string[]): Promise<number | void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./playwright/run.ts');
+        const { run } = await import('./run.ts');
         return run(argv);
     },
 };

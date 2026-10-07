@@ -1,6 +1,6 @@
 // `seu port`. The flow itself lives in src/cmd/port/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const PORT: Command = {
     name: 'port',
@@ -39,7 +39,7 @@ Every spec is validated before any tunnel starts, so a typo in the last one does
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./port/run.ts');
+        const { run } = await import('./run.ts');
         await run(argv);
     },
 };

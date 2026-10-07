@@ -1,6 +1,6 @@
 // `seu stop`. The flow itself lives in src/cmd/stop/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const STOP: Command = {
     name: 'stop',
@@ -16,7 +16,7 @@ To get rid of a SEU for good, use \`seu remove\`.`,
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./stop/run.ts');
+        const { run } = await import('./run.ts');
         await run(argv);
     },
 };

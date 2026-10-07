@@ -1,6 +1,6 @@
 // `seu start`. The flow itself lives in src/cmd/start/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const START: Command = {
     name: 'start',
@@ -61,7 +61,7 @@ Your own ~/.m2/repository is mounted read-only at /host-m2 in the install sandbo
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it. Returns what the
         // shell it ends in exited with.
-        const { run } = await import('./start/run.ts');
+        const { run } = await import('./run.ts');
         return run(argv);
     },
 };

@@ -1,6 +1,6 @@
 // `seu pull`. The flow itself lives in src/cmd/pull/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const PULL: Command = {
     name: 'pull',
@@ -20,7 +20,7 @@ This needs at least one commit in /work: a bundle of nothing is an error, not an
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./pull/run.ts');
+        const { run } = await import('./run.ts');
         await run(argv);
     },
 };

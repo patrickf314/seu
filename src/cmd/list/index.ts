@@ -1,6 +1,6 @@
 // `seu list`. The flow itself lives in src/cmd/list/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const LIST: Command = {
     name: 'list',
@@ -21,7 +21,7 @@ The list goes to stdout, everything else to stderr, so it can be piped.`,
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./list/run.ts');
+        const { run } = await import('./run.ts');
         await run(argv);
     },
 };

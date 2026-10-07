@@ -1,10 +1,6 @@
-// What a seu command is.
-//
-// Every command is ONE const: its documentation and the code that runs it, in
-// the same file. `seu help` renders the documentation and never has to know
-// what a command does; `cli.ts` calls `run` and never has to know what a
-// command is called.
-
+/**
+ * An interface representing a command option
+ */
 export interface CommandOption {
     /**
      * As the user types it, e.g. `--no-host-m2`.
@@ -17,6 +13,9 @@ export interface CommandOption {
     readonly text: string;
 }
 
+/**
+ * An interface representing a command
+ */
 export interface Command {
     /**
      * The word after `seu`.

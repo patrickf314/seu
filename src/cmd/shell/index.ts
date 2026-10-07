@@ -1,6 +1,6 @@
 // `seu shell`. The flow itself lives in src/cmd/shell/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const SHELL: Command = {
     name: 'shell',
@@ -20,7 +20,7 @@ Ctrl+] detaches from the terminal session without ending the shell.`,
     async run(argv: string[]): Promise<number> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./shell/run.ts');
+        const { run } = await import('./run.ts');
         return run(argv);
     },
 };

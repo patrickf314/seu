@@ -1,6 +1,6 @@
 // `seu remove`. The flow itself lives in src/cmd/remove/run.ts.
 
-import type { Command } from './command.ts';
+import type { Command } from '../command.ts';
 
 export const REMOVE: Command = {
     name: 'remove',
@@ -25,7 +25,7 @@ What \`seu pull\` brought over is kept: the bundle stays in the state directory 
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the
         // microsandbox SDK, and `seu help` must not need it.
-        const { run } = await import('./remove/run.ts');
+        const { run } = await import('./run.ts');
         await run(argv);
     },
 };
