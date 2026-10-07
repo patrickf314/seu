@@ -2,11 +2,19 @@
 // execs, and dockerd. Port of the sandbox half of lib/common.sh, on top of the
 // microsandbox SDK instead of the `msb` CLI.
 
-import type { ExecHandle, Sandbox } from "microsandbox";
+import type { ExecHandle, NetworkPolicyBuilder, Sandbox, SandboxStatus } from "microsandbox";
 import { sdk } from "./microsandbox/microsandboxSdk.ts";
 import { sleep } from "./host.ts";
 import { LOG } from "./common/log.ts";
 import { die } from "./common/error.ts";
+import type { Instance } from "./config/project.ts";
+
+// The SDK types `SandboxBuilder.network()`'s callback argument as `any`, so the
+// builders reached through it carry no types of their own. These recover them
+// from the constructors the package does export; `import type` is erased, so
+// nothing is loaded at runtime.
+type NetworkBuilder = InstanceType<typeof import("microsandbox").NetworkBuilder>;
+type TlsBuilder = InstanceType<typeof import("microsandbox").TlsBuilder>;
 
 export const RESOURCES = {
   cpus: 4,
@@ -18,10 +26,25 @@ export const RESOURCES = {
 export const VOLUME_MOUNT = "/seu";
 export const VOLUME_SIZE_MIB = 20 * 1024;
 
+/** The worktree, mounted read-only. Nothing in here is ever written to. */
+export const SRC_MOUNT = "/src";
+
+/** The writable clone of /src, living in the named volume. */
+export const WORK_DIR = "/work";
+
+/** The host's own Maven repository, read-only. Install sandbox only. */
+export const HOST_REPOSITORY_MOUNT = "/host-m2";
+
 export const volumeName = (slug: string): string => `seu-${slug}-data`;
 
-export async function ensureVolume(slug: string): Promise<string> {
-  const name = volumeName(slug);
+/** The long-lived sandbox a developer works in. One per SEU instance. */
+export const sessionSandboxName = (instance: Instance): string => `seu-${instance.slug}`;
+
+/** The throwaway sandbox `seu start` installs in before the session exists. */
+export const installSandboxName = (instance: Instance): string => `seu-install-${instance.slug}`;
+
+export async function ensureVolume(instance: Instance): Promise<string> {
+  const name = volumeName(instance.slug);
   const { Volume } = await sdk();
   const existing = await Volume.list();
   if (existing.some((v) => v.name === name)) {
@@ -206,4 +229,156 @@ async function dockerdRunning(sandbox: Sandbox): Promise<boolean> {
     timeoutMs: 20_000,
   });
   return probe.ok;
+}
+
+// --------------------------------------------------------------- sandbox lifecycle
+
+/**
+ * Egress for one sandbox. Fixed at creation -- microsandbox has no way to
+ * narrow a running sandbox's policy -- which is why the install sandbox and the
+ * session are two different sandboxes over one shared volume.
+ */
+export interface NetworkSpec {
+  readonly policy: NetworkPolicyBuilder;
+  /**
+   * Fail closed on anything the policy cannot inspect. It REQUIRES TLS
+   * interception (which is also what stops a hostname allow from being
+   * domain-fronted), so the two are turned on together below.
+   *
+   * Off for the install sandbox: interception would mean importing
+   * the microsandbox CA into the JDK truststore, because the JVM ignores the OS
+   * trust store and Maven would fail every HTTPS fetch. Those are controlled,
+   * one-shot steps, so a plain hostname allowlist is the right trade there.
+   */
+  readonly strict: boolean;
+}
+
+export interface ProjectSandboxSpec {
+  readonly name: string;
+  /** Base image reference, already loaded into microsandbox's image store. */
+  readonly image: string;
+  readonly instance: Instance;
+  readonly network: NetworkSpec;
+  /**
+   * The developer's own ~/.m2/repository, mounted read-only at /host-m2 as a
+   * resolution source. Install sandbox only; undefined for the session, which must not depend on a
+   * host path it will not have.
+   */
+  readonly hostRepository?: string | undefined;
+  /**
+   * Outlive this process. True for the session, which has to still be there
+   * when `seu start` returns; false for a throwaway sandbox, which must not.
+   */
+  readonly detached: boolean;
+}
+
+/**
+ * The one definition of how a seu sandbox is mounted and resourced. Every
+ * sandbox of an instance sees the same /src, the same named volume and the same
+ * toolchain image; only the name, the egress policy and the lifetime differ.
+ */
+export async function createProjectSandbox(spec: ProjectSandboxSpec): Promise<Sandbox> {
+  const { Sandbox } = await sdk();
+  const { instance } = spec;
+  const { project } = instance;
+
+  const builder = Sandbox.builder(spec.name)
+    .image(spec.image)
+    .pullPolicy("never")
+    .replace()
+    .detached(spec.detached)
+    .cpus(RESOURCES.cpus)
+    .memory(RESOURCES.memoryMiB)
+    .rootDisk(RESOURCES.rootDiskMiB)
+    .idleTimeout(RESOURCES.idleTimeoutSecs)
+    .user("seu")
+    .shell("/bin/bash")
+    .network((n: NetworkBuilder) => {
+      n.strict(spec.network.strict).policy(spec.network.policy);
+      if (spec.network.strict) n.tls((t: TlsBuilder) => t.verifyUpstream(true));
+      return n;
+    })
+    .volume(VOLUME_MOUNT, (m) => m.namedWith(volumeName(instance.slug), "ensure-exists", "disk", VOLUME_SIZE_MIB))
+    .volume(SRC_MOUNT, (m) => m.bind(project.root).readonly());
+
+  // A separate git dir (worktree, submodule) is mounted at its own absolute
+  // path, so the .git *file*'s pointer resolves unchanged inside the VM.
+  // Without it session-init refuses to clone rather than producing a
+  // history-less copy -- which is how you lose work.
+  const gitDir = project.gitDir;
+  if (gitDir !== null) {
+    builder.volume(gitDir, (m) => m.bind(gitDir).readonly());
+  }
+
+  if (spec.hostRepository !== undefined) {
+    builder.volume(HOST_REPOSITORY_MOUNT, (m) => m.bind(spec.hostRepository as string).readonly());
+  }
+
+  return builder.create();
+}
+
+/** The sandbox's status, or `absent` when there is no such sandbox. */
+export async function sandboxStatus(name: string): Promise<SandboxStatus | "absent"> {
+  const { Sandbox } = await sdk();
+  try {
+    return (await Sandbox.get(name)).status;
+  } catch {
+    // `get` throws for an unknown name. Nothing else about a sandbox we are
+    // about to create or replace is worth distinguishing here.
+    return "absent";
+  }
+}
+
+/** Resume a sandbox that exists but is not running, in detached mode. */
+export async function startSandbox(name: string): Promise<Sandbox> {
+  const { Sandbox } = await sdk();
+  try {
+    return await Sandbox.startDetached(name);
+  } catch (err) {
+    return die(`could not start ${name}: ${(err as Error).message}`);
+  }
+}
+
+/** Stop a running sandbox, forcing it if the graceful path does not converge. */
+export async function stopSandbox(name: string): Promise<void> {
+  const { Sandbox } = await sdk();
+  const handle = await Sandbox.get(name);
+  try {
+    await handle.stopWithTimeout(60_000);
+  } catch {
+    LOG.warn(`graceful stop of ${name} timed out; killing it`);
+    await handle.kill().catch(() => {});
+  }
+}
+
+/** Destroy a sandbox, gracefully if it will and forcibly if it will not. */
+export async function destroySandbox(sandbox: Sandbox): Promise<void> {
+  try {
+    await sandbox.destroy({ timeoutMs: 60_000 });
+  } catch {
+    await sandbox.destroy({ force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Clone /src into /work, carrying over uncommitted changes. See
+ * vm/session-init.sh; it is idempotent and leaves a populated /work alone, so
+ * the install sandbox and the session can both call it.
+ *
+ * A problem here is reported, not fatal: an empty /work is worth a session you
+ * can still get a shell in and look around.
+ */
+export async function prepareWork(sandbox: Sandbox): Promise<void> {
+  const result = await exec(sandbox, {
+    cmd: "bash",
+    args: ["-lc", "/usr/local/bin/session-init.sh"],
+    user: "seu",
+    timeoutMs: 15 * 60_000,
+    stream: true,
+  });
+  if (result.ok) {
+    LOG.ok(`${WORK_DIR} ready`);
+  } else {
+    LOG.warn(`session-init reported a problem; ${WORK_DIR} may be incomplete`);
+  }
 }

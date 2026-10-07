@@ -67,6 +67,15 @@ const MavenStep = z
 
 const PreInstallStepSchema = z.discriminatedUnion('type', [DockerStep, DockerComposeStep, MavenStep]);
 
+/**
+ * The one value in this file that is meant to BE a command. Everything else is
+ * validated into a shape no shell can misread; this is handed to `bash -lc` as
+ * written, because "build this project" has no smaller vocabulary than the
+ * project's own build tool. It only ever runs inside the guest, as `seu`, in a
+ * sandbox that is thrown away afterwards -- the host never sees it.
+ */
+const InstallScript = z.string().min(1, 'must be a shell command');
+
 const SeuConfigSchema = z
     .object({
         image: z
@@ -82,11 +91,24 @@ const SeuConfigSchema = z
                  */
                 'mise-toml': ProjectPath.optional(),
                 /**
-                 * What `seu build` fetches into the named volume once the image is
+                 * What `seu start` fetches into the named volume once the image is
                  * up, in the order written. The session has no egress, so this is the
                  * only chance anything here has to arrive.
                  */
                 'pre-install': z.array(PreInstallStepSchema).optional(),
+            })
+            .strict()
+            .optional(),
+
+        install: z
+            .object({
+                /**
+                 * What `seu start` runs once the install sandbox is up and still has build
+                 * egress: the project's own "make this checkout buildable" command.
+                 * Omitted means there is nothing to do and the session starts
+                 * straight away.
+                 */
+                script: InstallScript.optional(),
             })
             .strict()
             .optional(),
@@ -118,6 +140,14 @@ export interface SeuConfig {
          */
         readonly preInstall: readonly PreInstallStep[];
     };
+
+    readonly install: {
+        /**
+         * The shell command `seu start` runs, or undefined when the project
+         * configures none.
+         */
+        readonly script: string | undefined;
+    };
 }
 
 /**
@@ -138,6 +168,9 @@ export function loadConfig(project: Project): SeuConfig {
             tag: config.image?.tag ?? defaultTag(project),
             miseToml: resolveMiseToml(project, file, config.image?.['mise-toml']),
             preInstall: config.image?.['pre-install'] ?? []
+        },
+        install: {
+            script: config.install?.script?.trim() || undefined,
         },
     };
 }

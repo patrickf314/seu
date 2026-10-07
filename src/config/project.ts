@@ -19,6 +19,13 @@ function requireSEURoot(): string {
 
 export const SEU_ROOT = requireSEURoot();
 
+/**
+ * Where every per-project state directory lives, plus the handful of things
+ * that are seu's rather than one project's -- the SSH key `seu port` forwards
+ * over. SEU_STATE_DIR relocates all of it.
+ */
+export const STATE_ROOT = process.env['SEU_STATE_DIR'] ?? join(SEU_ROOT, '.seu-state');
+
 export interface Project {
     /**
      * Absolute, symlink-resolved worktree root. Mount sources must be real
@@ -34,12 +41,33 @@ export interface Project {
      *  VM. Empty for an ordinary in-tree .git, which rides along with /src. */
     gitDir: string | null;
     /**
-     * The name with hash of the worktree root, used to name the sandbox and state dir.
+     * Short hash of the worktree root. Keeps two checkouts that happen to share
+     * a directory name apart in microsandbox's global namespace.
      */
-    slug: string;
-    stateDir: string;
+    hash: string;
     confFile: string;
 }
+
+/**
+ * One SEU of a project. A worktree can have several -- `seu start review` next
+ * to the default one -- and each has its own session sandbox, named volume and
+ * state dir. Only the base image is shared: it holds the toolchain, which is the
+ * project's, not the instance's.
+ */
+export interface Instance {
+    readonly project: Project;
+    /** As the user types it. Defaults to the worktree's directory name. */
+    readonly name: string;
+    /**
+     * `<name>-<project hash>`: what the sandbox, the volume and the state dir
+     * are named after. For the default instance this is exactly what the
+     * single-instance seu used, so existing sessions are picked up unchanged.
+     */
+    readonly slug: string;
+    readonly stateDir: string;
+}
+
+const INSTANCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export async function resolveProject(start: string = process.cwd()): Promise<Project> {
     if (!existsSync(start) || !statSync(start).isDirectory()) {
@@ -66,17 +94,48 @@ export async function resolveProject(start: string = process.cwd()): Promise<Pro
         }
     }
 
-    const hash = createHash('sha256').update(root).digest('hex').slice(0, 8);
-    const slug = `${name}-${hash}`;
-    const stateDir = join(process.env['SEU_STATE_DIR'] ?? join(SEU_ROOT, '.seu-state'), slug);
-    mkdirSync(stateDir, { recursive: true });
-
     return {
         root,
         name,
         gitDir,
-        slug,
-        stateDir,
+        hash: createHash('sha256').update(root).digest('hex').slice(0, 8),
         confFile: join(root, CONFIG_FILE),
     };
+}
+
+/**
+ * The instance called `name`, or the project's default one.
+ *
+ * The name ends up in sandbox and volume names, so it is held to what those
+ * accept rather than passed through.
+ */
+export function resolveInstance(project: Project, name: string = defaultInstanceName(project)): Instance {
+    if (!INSTANCE_NAME.test(name)) {
+        die(`not a usable SEU name: ${name} -- letters, digits, '.', '_' and '-' only`);
+    }
+
+    const slug = `${name}-${project.hash}`;
+    const stateDir = join(STATE_ROOT, slug);
+    mkdirSync(stateDir, { recursive: true });
+
+    return { project, name, slug, stateDir };
+}
+
+/** The directory name, with anything a sandbox name cannot hold replaced. */
+function defaultInstanceName(project: Project): string {
+    const name = project.name.replace(/[^A-Za-z0-9._-]/g, '-');
+    if (!INSTANCE_NAME.test(name)) {
+        die(`cannot derive a SEU name from the directory name ${project.name} -- pass one`);
+    }
+    return name;
+}
+
+/**
+ * Split an optional leading instance name off a command's argv. Options stay
+ * where they are; a second positional is the caller's to refuse.
+ */
+export function takeInstanceName(argv: readonly string[]): { name: string | undefined; rest: string[] } {
+    const index = argv.findIndex((a) => !a.startsWith('-'));
+    if (index === -1) return { name: undefined, rest: [...argv] };
+    return { name: argv[index], rest: argv.filter((_, i) => i !== index) };
 }

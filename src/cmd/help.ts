@@ -41,7 +41,7 @@ function wrap(text: string, indent: number, width = WIDTH): string {
 }
 
 /**
- * `  build [options]      once per worktree: ...`,
+ * `  start [name] [options]  build, install and ...`,
  * wrapped and aligned.
  */
 function listEntry(command: Command): string {
@@ -83,7 +83,7 @@ function page(command: Command): string {
 }
 
 /**
- * `seu build [options]` -- the first line of a command's own help page.
+ * `seu start [name] [options]` -- the first line of a command's own help page.
  */
 function usageLine(command: Command): string {
     return `usage: seu ${command.name}${command.args ? ` ${command.args}` : ''}`;

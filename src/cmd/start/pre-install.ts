@@ -1,22 +1,19 @@
-// The pre-install phase of `seu build`: everything `image.pre-install` in
-// .seu/config.json asks for, fetched into the named volume while the build
+// The pre-install phase of `seu start`: everything `image.pre-install` in
+// .seu/config.json asks for, fetched into the named volume while the install
 // sandbox still has egress.
 //
-// This is the whole point of having a build sandbox at all. A session has no
+// This is the whole point of having an install sandbox at all. A session has no
 // network, so an image that is not in /seu/docker and an artifact that is not
 // in /seu/m2 by the time this returns is simply not available in the session --
 // it fails there as a pull timeout or an "artifact has not been downloaded from
 // it before", far from the config line that forgot to name it. Hence: every
-// step that fails is reported, and a single failure fails the build.
+// step that fails is reported, and a single failure fails the start.
 
 import type { Sandbox } from 'microsandbox';
 import type { PreInstallStep } from '../../config/config.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { exec } from '../../sandbox.ts';
-
-/** The worktree, mounted read-only into the build sandbox. Compose files live here. */
-export const SRC_MOUNT = '/src';
+import { exec, SRC_MOUNT } from '../../sandbox.ts';
 
 const COMPOSE_TIMEOUT_MS = 2 * 60_000;
 const PULL_TIMEOUT_MS = 20 * 60_000;

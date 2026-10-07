@@ -16,5 +16,8 @@
         "artifact": "org.apache.maven.plugins:maven-failsafe-plugin:3.5.6"
       }
     ]
+  },
+  "install": {
+    "script": "mvn clean install -DskipTests -T1C && mvn exec:java --file club/club-ui/club-ui-test/pom.xml -e -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args=\"install-deps\""
   }
 }

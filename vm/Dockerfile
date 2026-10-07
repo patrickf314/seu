@@ -41,6 +41,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
  && chmod 0755 /usr/local/bin/ccstatusline \
  && /usr/local/bin/ccstatusline --version
 
+# --- Playwright's browser system dependencies ---
+# `install-deps` is an apt-get install: it needs root, and it writes outside
+# /seu. That makes it impossible from `install.script` -- which runs as `seu`,
+# in a sandbox whose rootfs is destroyed afterwards -- on two counts, and the
+# `sudo` password prompt is only the first one you hit. It belongs here, where
+# it runs once as root and every sandbox of this image inherits it.
+#
+# Playwright's own CLI rather than a hand-written package list: the names drift
+# per Debian release -- the t64 ABI transition renamed half of them -- and the
+# driver is the thing that knows which ones this version actually needs.
+#
+# playwright-core, fetched as a tarball the way ccstatusline is above, for two
+# reasons: Debian's `nodejs` package carries no npm, so there is no npx; and the
+# full `playwright` package downloads BROWSER BINARIES on install. Those are
+# per-project, they are a download the session cannot repeat, and they belong in
+# ~/.cache/ms-playwright on the named volume -- which is what `install.script`
+# is for. Only the OS libraries are baked in here.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_BROWSERS="chromium firefox"
+RUN mkdir -p /opt/playwright-core \
+ && curl -fsSL "https://registry.npmjs.org/playwright-core/-/playwright-core-${PLAYWRIGHT_VERSION}.tgz" \
+      | tar -xz -C /opt/playwright-core --strip-components=1 \
+ && apt-get update \
+ && node /opt/playwright-core/cli.js install-deps ${PLAYWRIGHT_BROWSERS} \
+ && rm -rf /opt/playwright-core /var/lib/apt/lists/*
+
 # --- the user
 RUN useradd --create-home --shell /bin/bash --uid 1000 seu \
  && usermod -aG docker seu \

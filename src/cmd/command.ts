@@ -40,9 +40,14 @@ export interface Command {
     readonly options?: readonly CommandOption[];
 
     /**
-     * Command main method
+     * Command main method.
+     *
+     * Returns the process exit code, or nothing for the usual case where
+     * finishing without throwing means success. `shell` is the one that needs
+     * it: the exit status of the shell you were just in is its own answer, not
+     * seu's.
      *
      * @param argv
      */
-    run(argv: string[]): Promise<void>;
+    run(argv: string[]): Promise<void | number>;
 }

@@ -13,7 +13,7 @@ import type { SeuConfig } from '../../config/config.ts';
 import { SEU_ROOT } from '../../config/project.ts';
 import { sdk } from '../../microsandbox/microsandboxSdk.ts';
 
-/** Everything that goes into the image, so `build` can skip a rebuild. */
+/** Everything that goes into the image, so `start` can skip a rebuild. */
 const IMAGE_INPUTS = [
     'vm/Dockerfile',
     'vm/dockerd-run.sh',

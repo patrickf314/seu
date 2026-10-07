@@ -18,10 +18,11 @@ piece to move out.
 
 - macOS on Apple Silicon (microsandbox does not support Intel)
 - `msb` (microsandbox) installed at `~/.microsandbox/bin/msb`
-- Node 22+. `seu help` runs with nothing installed; `seu build` needs the
+- Node 22+. `seu help` runs with nothing installed; `seu start` needs the
   microsandbox SDK, which `npm install` (in a checkout) or the package's own
   dependency (when installed) provides
-- Docker on the host — for `seu build` only; sessions never touch it
+- Docker on the host — only for building the base image in `seu start`;
+  sessions never touch it
 - Artifact-repository credentials for whatever the project needs, either in
   `~/.m2/settings.xml` or as `GITHUB_ACTOR` / `GITHUB_TOKEN`
 
@@ -31,29 +32,51 @@ piece to move out.
 git worktree add ../website-react-foo feature/foo
 cd ../website-react-foo
 
-./seu/bin/seu doctor      # check the host is ready
-./seu/bin/seu build       # once per worktree; downloads everything, then opens a shell
+./seu/bin/seu start       # base image, install, then leave the VM up with no network
 ```
 
 Afterwards:
 
 ```bash
-./seu/bin/seu shell       # new shell in the VM (starts it if stopped)
-./seu/bin/seu stop        # suspend; /work and all caches persist
-./seu/bin/seu start       # resume
-./seu/bin/seu status      # VM, toolchain, docker, disk, git state
+./seu/bin/seu shell       # new shell in the VM (resumes it if stopped)
 ./seu/bin/seu pull        # fetch the VM's commits back as a git remote
 ./seu/bin/seu port 8080   # forward a host port into the VM, docker-style
-./seu/bin/seu clean       # remove the VM (add --volumes to drop the caches too)
 ```
 
-`build` takes `--with-images` (also produce the project's application images,
-which the test compose file needs — slower, a lot more disk), `--rebuild`,
-`--no-host-m2`, `--no-host-images` and `--refresh-images`.
+`start` only does what is still missing: it builds the base image if it is not
+loaded, installs into a fresh volume, and creates the session — or, when the
+session already exists, just resumes it. `--reinstall` runs the install again
+(after changing `image.pre-install` or `install.script`), `--rebuild` also
+rebuilds the base image; both recreate the session but keep the volume.
+`--no-host-m2` turns off [borrowing the host's Maven repository](#borrowing-the-hosts-maven-repository).
+
+### Several SEUs of one worktree
+
+Every SEU has a name, by default the worktree's directory name. Pass another
+one to get a second, independent sandbox of the same checkout — its own session,
+its own named volume (so its own `/work`, `~/.m2` and Docker images) and its own
+port forwards. Only the base image is shared.
+
+```bash
+./seu/bin/seu start review          # a second SEU next to the default one
+./seu/bin/seu shell review
+./seu/bin/seu pull review           # fetched as remote seu-review
+./seu/bin/seu port -n review 8081:8080
+```
+
+The sandbox is `seu-<name>-<hash of the worktree path>` and the volume
+`seu-<name>-<hash>-data`, so the default SEU keeps the names it always had.
+
+`stop`, `status`, `clean`, `doctor` and `playwright` still exist only
+as `lib/cmd-*.sh` and have no entry point since `bin/seu` stopped dispatching to
+bash — see [Two halves](#two-halves-typescript-and-bash). `shell` resumes a
+stopped session itself.
 
 Your Claude Code settings, your `ccstatusline` layout and your login are carried
-into the VM on every `start`/`shell` — see
+into the VM by the bash `start`/`shell` — see
 [Your Claude Code setup follows you in](#your-claude-code-setup-follows-you-in).
+**The TypeScript `shell` does not do this yet**, so a session it attaches to
+starts logged out: run `/login` inside the VM.
 
 Inside the VM:
 
@@ -72,23 +95,86 @@ repository**, not in seu:
 {
   "image": {
     "tag": "website-react",
-    "mise-toml": "./mise.toml"
+    "mise-toml": "./mise.toml",
+    "pre-install": [{ "type": "docker", "image": "postgres:18" }]
+  },
+  "install": {
+    "script": "mvn clean install -DskipTests -T1C"
   }
 }
 ```
 
-Both keys are optional, and so is the file:
+Every key is optional, and so is the file:
 
 | key | default | what it does |
 | --- | --- | --- |
 | `image.tag` | the worktree's directory name | base-image repository name, so two repositories never share (and invalidate) each other's image. The hash of the image inputs is appended to it. |
 | `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
+| `image.pre-install` | nothing | what `seu start` fetches into the named volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
+| `install.script` | nothing | what `seu start` runs in `/work` to make the checkout buildable. See below. |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
 [zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches
 a host command, and unknown keys are rejected rather than ignored — a typo that
 silently produced a toolchain-less image is exactly the failure this prevents.
-The repository seu sandboxes is not a repository seu trusts.
+The repository seu sandboxes is not a repository seu trusts. The one exception is
+`install.script`, which is a command by design — and which therefore never
+reaches the host at all.
+
+### `install.script`, and why the session is not the one running it
+
+`seu start` runs this command and then leaves the session VM running with egress
+narrowed to Anthropic. It cannot do both in one sandbox: microsandbox fixes a
+network policy at creation, and an install has to resolve dependencies. So
+`start` runs it in a **throwaway sandbox under the build policy** — right after
+the pre-install, as `seu`, in `/work`, with a docker daemon up — destroys that sandbox, and creates the session over the
+same named volume. What the install wrote into `/seu` (`/work`, `~/.m2` and
+`~/.cache` are symlinks into it) is exactly what the offline session gets;
+anything it left elsewhere dies with the sandbox.
+
+`start` is idempotent: on a running sandbox it says so, on a stopped one it resumes
+it. Neither re-runs the install, because `/work` and every cache live in the
+volume — `--reinstall` asks for it anyway.
+
+### Private repositories — nothing to configure
+
+There is no credential configuration, and seu never reads your
+`~/.m2/settings.xml`. Instead `seu start` mounts your own
+`~/.m2/repository` **read-only at `/host-m2`** and declare it as a `file://`
+repository ahead of the real remotes. An artifact from a private repository is
+already sitting in there, so the sandbox copies it out of a local file rather
+than authenticating to anything.
+
+It is a resolution *source*, not a seed. Copying wholesale is not an option — a
+working repository is tens of gigabytes against a 20 GiB volume, and virtiofs is
+slow enough that a bulk copy would lose to a plain download. As a `file://`
+remote, Maven takes exactly what this project asks for and copies it into
+`/seu/m2`, so the session stays self-contained with no host mount. Anything
+`/host-m2` cannot serve falls through to the real remotes as before.
+
+`--no-host-m2` (or `SEU_USE_HOST_M2=0`) turns it off; `SEU_HOST_M2` relocates it.
+A machine that has never run Maven simply downloads everything.
+
+Three things make this work, and each is a trap if skipped:
+
+- **Releases only, and an additional repository rather than a mirror.** A
+  `file://` local repository is a valid Maven *remote* for releases and nothing
+  more: it carries `maven-metadata-<repoid>.xml`, not the remote-layout metadata
+  snapshot and version-range resolution read. As a mirror it would swallow those
+  lookups and fail them.
+- **The tracking files are deleted at handover.** Maven records each artifact's
+  origin in `_remote.repositories`, and offline it refuses an artifact whose
+  recorded origin is not among the repositories currently in play. Half the
+  repository now claims to come from `seu-host-m2`, a URL that exists only in the
+  build sandbox — so `_remote.repositories`, `*.lastUpdated`,
+  `resolver-status.properties` and `*.part*` are removed before the session
+  starts. Without it the session cannot resolve what was just fetched for it.
+- **The session's `settings.xml` is replaced with `<offline>true</offline>`.** It
+  has no mount for `/host-m2` and no egress; saying so makes Maven fail fast
+  instead of timing out against a remote it cannot reach.
+
+The mount exists only in the build and install sandboxes. The session sandbox is
+created after they are destroyed, and never sees a host path.
 
 `examples/website-react.config.json` is the profile for the project this grew
 out of.
@@ -123,13 +209,19 @@ from `dist/cli.js` and from a split chunk.
 
 ### Two halves
 
-`bin/seu` is a launcher: it execs `src/cli.ts`, and every command — ported or
-not — is a `Command` const in `src/cmd/` carrying its own documentation and its
-own `run`. `build` runs here and talks to microsandbox through the **npm SDK**
-(`microsandbox`); the others still shell out to `lib/cmd-<name>.sh` and the
-**`msb` CLI** from inside their `run` (`src/cmd/bash.ts`). Porting one means
-replacing that `run`; the registry, the dispatcher and `seu help` do not
-change.
+`bin/seu` is a launcher: it execs `src/cli.ts`, and every command is a
+`Command` const in `src/cmd/` carrying its own documentation and its own `run`.
+`start`, `shell`, `pull` and `port` are ported and talk to microsandbox
+through the **npm SDK** (`microsandbox`); `start` replaces the bash `build`, `up`
+and `start`. What is left in `lib/` — `stop`, `status`, `clean`, `doctor`, `playwright` and the Claude config sync —
+is not reachable from `bin/seu` at all any more; sourcing `lib/cmd-<name>.sh`
+by hand is the only way to run it. Porting one means adding its `Command`; the
+registry, the dispatcher and `seu help` do not change.
+
+`seu port` is the one ported command that still drives the **`msb` CLI**: its
+tunnels need `msb ssh serve --stdio` as an openssh `ProxyCommand`, and the SDK
+exposes no port-forwarding API. It uses the binary the SDK itself resolves, so
+there is still only one runtime in play.
 
 Both halves share `vm/`, `config/`, `lib/*.py` and — crucially — one
 microsandbox home, so a sandbox, volume or image created by one is the same
@@ -138,7 +230,7 @@ object for the other.
 That shared home is also the trap: **the SDK and the CLI must be the same
 version.** They share `~/.microsandbox/db/msb.db`, and the SDK migrates its
 schema; an older CLI then refuses every command with *"database schema is newer
-than this msb binary"*. `seu build` warns when the two drift apart. The fix is
+than this msb binary"*. `seu start` warns when the two drift apart. The fix is
 to install the SDK's own binary over the CLI:
 
 ```bash
@@ -151,13 +243,13 @@ tested sandbox launch contract for runtime X"*), even at a matching version, so
 `src/runtime.ts` points it at the binary inside its own platform package while
 leaving `MSB_HOME` alone.
 
-## How `seu build` works, and why it is two sandboxes
+## How `seu start` works, and why it is two sandboxes
 
 The session must have almost no network. The warm-up needs a lot of it. And
 **a sandbox's network policy cannot be changed after creation** — so one
 sandbox cannot be both.
 
-`seu build` therefore creates a *throwaway* build sandbox with wide egress (the
+`seu start` therefore creates a *throwaway* install sandbox with wide egress (the
 allowlist in `src/network/net.ts`; `config/net-build.yaml` is the bash half's copy),
 fills four **named volumes**, and destroys it. The
 session sandbox is then created with the locked-down profile
@@ -181,10 +273,25 @@ Symlinks baked into `vm/Dockerfile` point the well-known paths into it:
 Because those are symlinks, `du -sh ~/.m2` and `find /work` report nothing
 useful — measure `/seu/m2` and `/seu/work` instead.
 
-**This is why every `apt-get install` lives in `vm/Dockerfile`** and not in a
-warm-up step — including Playwright's Chromium dependencies, which CI installs
-at test time via `mvn exec:java -Dexec.args="install-deps"`. Anything written
-outside `/seu` during the warm-up is thrown away with the build sandbox.
+**This is why every `apt-get install` lives in `vm/Dockerfile`** and not in
+`install.script`. Anything written outside `/seu` is thrown away with the
+sandbox, and the install runs as `seu`, so a step that needs root cannot run
+there in the first place — it announces itself as a `sudo` password prompt on a
+VM that has no password. `seu start` warns when it spots `sudo`, `apt-get` or
+`install-deps` in the script.
+
+Playwright is the standing example, and it splits in two:
+
+| | where | why |
+| --- | --- | --- |
+| `install-deps` — the OS libraries | `vm/Dockerfile` | apt-get, needs root, lives outside `/seu` |
+| `install <browsers>` — the binaries | `install.script` | land in `~/.cache/ms-playwright`, which is on the volume |
+
+So CI's `mvn exec:java -Dexec.args="install-deps"` becomes
+`-Dexec.args="install chromium firefox"` in a seu profile; the image already
+carries what `install-deps` would have installed. The Dockerfile does that with
+Playwright's own CLI rather than a hand-written package list, because the Debian
+package names drift per release.
 
 It is a `--kind disk` (ext4) volume, not a directory volume: overlay2 cannot use
 a virtiofs mount (`failed to mount overlay: invalid argument`), and a Maven
@@ -192,7 +299,7 @@ repository on virtiofs is painfully slow.
 
 ## Borrowing the host's Maven repository
 
-`seu build` used to download a Maven world you already have. It now mounts
+`seu start` used to download a Maven world you already have. It now mounts
 `~/.m2/repository` **read-only at `/host-m2` in the build sandbox** and declares
 it as a `file://` repository, first in the resolution order.
 
@@ -258,7 +365,7 @@ session cannot resolve.
 
 Browser binaries are per-platform, so there is nothing to reuse from the host —
 those are macOS builds and the guest is linux-arm64. They are downloaded during
-`seu build` into `~/.cache/ms-playwright`, which lives in the persistent volume.
+`seu start` into `~/.cache/ms-playwright`, which lives in the persistent volume.
 
 ```ini
 playwright_pom     = club/club-ui/club-ui-test/pom.xml
@@ -347,7 +454,7 @@ below, on a container whose architecture looks perfectly correct.
 Artifact-repository credentials only — for the Anthropic login, see
 [Copying the login](#copying-the-login).
 
-`seu build` needs them; a session must not have them.
+`seu start` needs them; a session must not have them.
 
 For each `maven_server` in the profile, the credentials are read from your
 environment or `~/.m2/settings.xml` **on the host** and passed to the build
@@ -377,13 +484,18 @@ change above and now applies to one variable per server. `msb create
 --secret-conf` is the candidate fix.
 
 **Consequence:** adding a *new* dependency does not work inside a session. Add it
-on the host and re-run `seu build`.
+on the host and re-run `seu start --reinstall`.
 
 ## Your Claude Code setup follows you in
 
-A sandbox you have to re-configure is a sandbox you stop using. Every `seu
-start` and `seu shell` projects your host configuration into the VM, so there is
-nothing to set up in there and nothing to log in to:
+A sandbox you have to re-configure is a sandbox you stop using, so seu projects
+your host configuration into the VM instead of making you set it up in there:
+
+> **Not yet ported.** This is `seu_sync_claude_config` in `lib/common.sh` plus
+> `lib/claude-config.py`, and it ran on every bash `start` and `shell`. The
+> TypeScript `shell` has no equivalent, so until it does, a session starts
+> logged out and with the image's own defaults.
+
 
 | on your Mac | in the VM | what happens to it |
 | --- | --- | --- |
@@ -393,7 +505,7 @@ nothing to set up in there and nothing to log in to:
 | login Keychain, `Claude Code-credentials` | `~/.claude/.credentials.json` | the OAuth tokens, so `/login` is never needed |
 
 At **start** time, not baked into the image: changing a setting then costs
-nothing, where a baked copy would cost a full `seu build`. `lib/claude-config.py`
+nothing, where a baked copy would cost a full `seu start --rebuild`. `lib/claude-config.py`
 does the projecting on the host; nothing is sourced or executed from either side.
 
 `SEU_SYNC_CLAUDE=0` turns all of it off and leaves the image's own
@@ -479,7 +591,7 @@ guest is untouched** — the Docker bridge, published container ports on
 `localhost`, container-to-container DNS, Testcontainers. That is why the test-env
 works under a deny-all policy.
 
-`config/net-build.yaml` is the wider profile used only by `seu build`. It is
+`config/net-build.yaml` is the wider profile used only by the install sandbox of `seu start`. It is
 deliberately **not** `strict` and has TLS interception **off**: interception
 would require importing microsandbox's CA into the JDK truststore, because the
 JVM ignores the OS trust store and Maven would fail every HTTPS fetch.
@@ -503,9 +615,11 @@ sandbox should not also publish that sandbox to your local network. Ask for
 
 Forwards are SSH tunnels against the **running** sandbox (see the maintenance
 note below for why they are not `msb create -p`), so ports can be added and
-dropped at any time and nothing in the VM restarts. They do not survive
-`seu stop` — `seu stop` and `seu clean` tear them down, so no `ssh -N` is ever
-left holding a host port.
+dropped at any time and nothing in the VM restarts. They do not survive the
+sandbox stopping and nothing recreates them: the tunnel's `ProxyCommand` exits
+with the sandbox, so its `ssh -N` exits too rather than sitting on a host port,
+and the next `seu port` prunes the record it left behind. Listing is the one
+mode that still works on a stopped session.
 
 Forwards connect to **`localhost`** inside the VM, not to `127.0.0.1`. That
 matters: a Vite dev server binds `[::1]` only, and an IPv4-literal destination
@@ -640,7 +754,7 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
   change: `msb create -n t --net-conf config/net-build.yaml alpine`, then
   `getent hosts <name>`. A blocked host returns NXDOMAIN.
 - Pin the Claude Code version for reproducible images:
-  `CLAUDE_CODE_VERSION=2.1.267 ./seu/bin/seu build --rebuild`.
+  `CLAUDE_CODE_VERSION=2.1.267 ./seu/bin/seu start --rebuild`.
 - **A `file://` local repository is a valid Maven *remote* for releases only.**
   It carries `maven-metadata-<repoid>.xml`, not the remote-layout metadata that
   snapshot and version-range resolution read, so `/host-m2` is declared with
@@ -714,23 +828,25 @@ bin/seu                     launcher: execs src/cli.ts
 src/cli.ts                  dispatcher: finds the command, runs it
    cmd/index.ts             the command registry
    cmd/command.ts           what a Command is: docs + run
-   cmd/bash.ts              run for a command still backed by lib/cmd-*.sh
-   cmd/build.ts             the build flow (the one ported command)
-   cmd/<name>.ts            one file per command: its docs, and its run
    cmd/help.ts              renders what the others declare
+   cmd/<name>.ts            one file per command: its docs, and its run
+   cmd/<name>/run.ts        its flow, kept apart so `seu help` needs no SDK
    config/config.ts         the zod-validated project profile
+   config/project.ts        project identity; SEU_ROOT and the state root
    common/log.ts            console output
    common/error.ts          SeuError and die()
-   sandbox.ts               volume layout, bounded execs, dockerd
+   sandbox.ts               volume layout, bounded execs, dockerd, lifecycle
+   session.ts               finding the session `start` left behind, and resuming
    runtime.ts               which msb binary the SDK drives
-   image.ts                 base-image hash, docker build, image import
-   project.ts               project identity
-   net.ts                   build-phase egress allowlist
-   host.ts  maven.ts        host processes; the generated in-VM settings.xml
-lib/common.sh               identity, volumes, dockerd supervision, SSH
-                            plumbing, the port-forward registry and the
-                            Claude config/credential sync
-    cmd-*.sh                one file per command
+   network/net.ts           build-phase and session egress allowlists
+   network/forward.ts       the SSH tunnels and port-forward registry
+   maven/hostRepository.ts  /host-m2 and the generated in-VM settings.xml
+   microsandbox/            the SDK, imported lazily
+   host.ts                  host processes: git, docker, ssh
+lib/common.sh               the bash half's identity, volumes, dockerd
+                            supervision, SSH plumbing, the port-forward
+                            registry and the Claude config/credential sync
+    cmd-*.sh                one file per not-yet-ported command
     conf-get.py             reads one key out of .seu/config.json, for bash
     maven-settings.py       generates the in-VM settings.xml
     claude-config.py        projects your ~/.claude setup onto the VM

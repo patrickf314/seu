@@ -35,8 +35,9 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  await command.run(argv);
-  return 0;
+  // A command that returns nothing finished, and finishing is success; the
+  // ones that end up running something of yours report what it exited with.
+  return (await command.run(argv)) ?? 0;
 }
 
 try {
