@@ -159,7 +159,20 @@ async function resolveArtifact(sandbox: Sandbox, artifact: string, failures: str
     }
 }
 
-/** The last few lines of a failure, indented. A swallowed one is unreadable later. */
+/**
+ * The lines of a failure that say why, indented. A swallowed one is unreadable
+ * later.
+ *
+ * Not simply the last few: mise's shims print a cache warning on every call
+ * (its cache dir is root's, and these run as `seu`), and five of those are
+ * exactly what used to be left of a Maven failure. Maven's own `[ERROR]` lines
+ * are what says why, so they win when there are any.
+ */
 function report(output: string): void {
-    for (const line of output.trim().split('\n').slice(-5)) LOG.debug(`    ${line}`);
+    const lines = output
+        .trim()
+        .split('\n')
+        .filter((l) => l.trim() !== '' && !l.startsWith('mise WARN'));
+    const errors = lines.filter((l) => l.startsWith('[ERROR]') && l.trim() !== '[ERROR]');
+    for (const line of (errors.length > 0 ? errors : lines).slice(-8)) LOG.debug(`    ${line}`);
 }

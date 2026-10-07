@@ -32,23 +32,54 @@ piece to move out.
 git worktree add ../website-react-foo feature/foo
 cd ../website-react-foo
 
-./seu/bin/seu start       # base image, install, then leave the VM up with no network
+./seu/bin/seu start       # create the SEU (or resume it) and open a shell in it
 ```
 
 Afterwards:
 
 ```bash
-./seu/bin/seu shell       # new shell in the VM (resumes it if stopped)
+./seu/bin/seu shell       # another shell in the VM (resumes it if stopped)
 ./seu/bin/seu pull        # fetch the VM's commits back as a git remote
 ./seu/bin/seu port 8080   # forward a host port into the VM, docker-style
 ```
 
-`start` only does what is still missing: it builds the base image if it is not
-loaded, installs into a fresh volume, and creates the session — or, when the
-session already exists, just resumes it. `--reinstall` runs the install again
-(after changing `image.pre-install` or `install.script`), `--rebuild` also
-rebuilds the base image; both recreate the session but keep the volume.
-`--no-host-m2` turns off [borrowing the host's Maven repository](#borrowing-the-hosts-maven-repository).
+`start` only does what is still missing, and ends in the SEU's shell (`--detach`
+stops before that):
+
+- the session exists → it is resumed, or left alone if it is running;
+- the SEU's volume exists, e.g. after `seu remove --keep-volume` → a new session
+  over it;
+- neither → the SEU is **cloned from the project's template**, which is built
+  first if there is none.
+
+### The template
+
+Installing — pulling the Docker images, resolving the Maven world, the first full
+build — is the slow part of a SEU, and it produces the same volume for every SEU
+of a project. So it happens **once per project**, into a volume of its own,
+`seu-template-<image.tag>`, and every new SEU's volume starts as a copy of it.
+
+The copy is an **APFS clone** of the volume's disk image (`disk.raw`, one raw
+ext4 file): it takes milliseconds and no disk space until the two diverge. The
+new SEU's `/work` is then moved onto *this* worktree with git — its branch, its
+commit, its uncommitted changes — keeping the template's git-ignored build
+outputs (`target/`, `node_modules`), so the first build is incremental. All
+worktrees of a repository share the template, since they share `image.tag`.
+`seu list` shows the templates under the SEUs.
+
+The template is built by the first `seu start` that needs one: base image (if
+not loaded), then a throwaway install sandbox with wide egress over the
+template volume, running the pre-install and `install.script`. A build that
+fails or is interrupted removes its half-built volume.
+
+`seu start --reinstall` rebuilds the base image and the template from the
+current worktree and recreates this SEU from the new template — after a change
+to `vm/Dockerfile`, `mise.toml`, `image.pre-install`, `install.script`, or a new
+dependency. It replaces the SEU's volume, so it first checks `/work` for work the
+host does not have and refuses unless `--force`. Other SEUs keep their volumes:
+clones are independent. `--no-host-m2` turns off
+[borrowing the host's Maven repository](#borrowing-the-hosts-maven-repository)
+for the install.
 
 ### Several SEUs of one worktree
 
@@ -82,7 +113,7 @@ as it was. `remove` is for good: the volume — `/work`, `~/.m2`, Docker images 
 goes with it. It first checks a running session for uncommitted changes and for
 branches whose commits the host does not have (never `seu pull`ed), refuses if
 there are any unless `--force`, and then asks you to type the name (`--yes`
-skips that). `--keep-volume` removes only the sandboxes. The `seu pull` bundle
+skips that). `--keep-volume` removes only the sandboxes; the next `start` creates a session over the kept volume. The `seu pull` bundle
 and its git remote are kept, since fetched-but-unmerged commits may live only
 there.
 
@@ -129,8 +160,8 @@ Every key is optional, and so is the file:
 | --- | --- | --- |
 | `image.tag` | the worktree's directory name | base-image repository name, so two repositories never share (and invalidate) each other's image. The hash of the image inputs is appended to it. |
 | `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
-| `image.pre-install` | nothing | what `seu start` fetches into the named volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
-| `install.script` | nothing | what `seu start` runs in `/work` to make the checkout buildable. See below. |
+| `image.pre-install` | nothing | what `seu start` fetches into the template volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
+| `install.script` | nothing | what `seu start` runs in the template's `/work` to make the checkout buildable. See below. |
 | `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright trace` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
@@ -147,14 +178,16 @@ reaches the host at all.
 narrowed to Anthropic. It cannot do both in one sandbox: microsandbox fixes a
 network policy at creation, and an install has to resolve dependencies. So
 `start` runs it in a **throwaway sandbox under the build policy** — right after
-the pre-install, as `seu`, in `/work`, with a docker daemon up — destroys that sandbox, and creates the session over the
-same named volume. What the install wrote into `/seu` (`/work`, `~/.m2` and
-`~/.cache` are symlinks into it) is exactly what the offline session gets;
-anything it left elsewhere dies with the sandbox.
+the pre-install, as `seu`, in `/work`, with a docker daemon up — over the
+[template](#the-template) volume, destroys that sandbox, and clones the template
+into the SEU's own volume, which the session is created over. What the install
+wrote into `/seu` (`/work`, `~/.m2` and `~/.cache` are symlinks into it) is
+exactly what the offline session gets; anything it left elsewhere dies with the
+sandbox.
 
-`start` is idempotent: on a running sandbox it says so, on a stopped one it resumes
-it. Neither re-runs the install, because `/work` and every cache live in the
-volume — `--reinstall` asks for it anyway.
+It runs once per project, not per SEU: on a running sandbox `start` says so, on
+a stopped one it resumes it, and a new SEU is a clone. `--reinstall` runs it
+again.
 
 ### Private repositories — nothing to configure
 
@@ -534,7 +567,7 @@ your host configuration into the VM instead of making you set it up in there:
 | login Keychain, `Claude Code-credentials` | `~/.claude/.credentials.json` | the OAuth tokens, so `/login` is never needed |
 
 At **start** time, not baked into the image: changing a setting then costs
-nothing, where a baked copy would cost a full `seu start --rebuild`. `lib/claude-config.py`
+nothing, where a baked copy would cost a full `seu start --reinstall`. `lib/claude-config.py`
 does the projecting on the host; nothing is sourced or executed from either side.
 
 `SEU_SYNC_CLAUDE=0` turns all of it off and leaves the image's own
@@ -631,11 +664,22 @@ A dev server or a published container port inside the VM is reachable *in* the
 VM but has no path to your Mac. `seu port` opens one:
 
 ```bash
-seu port                      # list the active forwards
+seu port                      # forward the ports in .seu/config.json (lists if none)
+seu port --list               # list the active forwards
 seu port 8080                 # shorthand for 8080:8080
 seu port 80:80 8080:8080      # HOST:GUEST, like docker
 seu port 0.0.0.0:8080:8080    # BIND:HOST:GUEST
 seu port --stop 8080          # drop one; --stop-all drops every forward
+```
+
+The ports a project usually needs can be named once in `.seu/config.json`, in
+the same spec syntax; a bare `seu port` then forwards all of them, skipping any
+that are already up:
+
+```json
+{
+  "ports": [8080, "5173:5173", "0.0.0.0:9000:9000"]
+}
 ```
 
 The default bind is `127.0.0.1`, not `0.0.0.0`: forwarding a port out of a
@@ -647,7 +691,8 @@ note below for why they are not `msb create -p`), so ports can be added and
 dropped at any time and nothing in the VM restarts. They do not survive the
 sandbox stopping and nothing recreates them: the tunnel's `ProxyCommand` exits
 with the sandbox, so its `ssh -N` exits too rather than sitting on a host port,
-and the next `seu port` prunes the record it left behind. Listing is the one
+and the next `seu port` prunes the record it left behind. Listing
+(`seu port --list`, or a bare `seu port` with no configured ports) is the one
 mode that still works on a stopped session.
 
 Forwards connect to **`localhost`** inside the VM, not to `127.0.0.1`. That
@@ -783,7 +828,7 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
   change: `msb create -n t --net-conf config/net-build.yaml alpine`, then
   `getent hosts <name>`. A blocked host returns NXDOMAIN.
 - Pin the Claude Code version for reproducible images:
-  `CLAUDE_CODE_VERSION=2.1.267 ./seu/bin/seu start --rebuild`.
+  `CLAUDE_CODE_VERSION=2.1.267 ./seu/bin/seu start --reinstall`.
 - **A `file://` local repository is a valid Maven *remote* for releases only.**
   It carries `maven-metadata-<repoid>.xml`, not the remote-layout metadata that
   snapshot and version-range resolution read, so `/host-m2` is declared with

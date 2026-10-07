@@ -6,6 +6,7 @@
 
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
+import { loadConfig } from '../../config/config.ts';
 import { type Instance, resolveInstance, resolveProject } from '../../config/project.ts';
 import { requireSession, sessionStatus } from '../../session.ts';
 import { sessionSandboxName } from '../../sandbox.ts';
@@ -26,10 +27,11 @@ interface PortOptions {
     readonly specs: string[];
     readonly stops: number[];
     stopAll: boolean;
+    list: boolean;
 }
 
 function parseArgs(argv: string[]): PortOptions {
-    const opts: PortOptions = { name: undefined, specs: [], stops: [], stopAll: false };
+    const opts: PortOptions = { name: undefined, specs: [], stops: [], stopAll: false, list: false };
 
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
@@ -52,6 +54,10 @@ function parseArgs(argv: string[]): PortOptions {
             case '--stop-all':
                 opts.stopAll = true;
                 break;
+            case '--list':
+            case '-l':
+                opts.list = true;
+                break;
             default:
                 if (arg.startsWith('-')) die(`unknown option for port: ${arg}`);
                 opts.specs.push(arg);
@@ -62,15 +68,21 @@ function parseArgs(argv: string[]): PortOptions {
 
 export async function run(argv: string[]): Promise<void> {
     const opts = parseArgs(argv);
-    const instance = resolveInstance(await resolveProject(), opts.name);
+    const project = await resolveProject();
+    const instance = resolveInstance(project, opts.name);
 
     if (opts.stopAll) return stopAll(instance);
     if (opts.stops.length > 0) return stop(instance, opts.stops);
-    if (opts.specs.length === 0) return await report(instance);
+    if (opts.list) return await report(instance);
+
+    // A bare `seu port` forwards the project's configured ports, and only
+    // lists when there are none.
+    const raw = opts.specs.length > 0 ? opts.specs : loadConfig(project).ports;
+    if (raw.length === 0) return await report(instance);
 
     // Every spec first, so a typo in the last one does not leave half the
     // forwards up.
-    const specs = opts.specs.map(parsePortSpec);
+    const specs = raw.map(parsePortSpec);
 
     // Only the tunnels need the sandbox; the SDK is used to guarantee it is
     // running, and `msb ssh serve` does the rest by name.
@@ -126,7 +138,7 @@ async function report(instance: Instance): Promise<void> {
     for (const forward of active) LOG.info(`${describe(forward)}  pid ${forward.pid}`);
     if (active.length > 0) return;
 
-    LOG.info('none -- e.g. `seu port 8080:8080`');
+    LOG.info("none -- e.g. `seu port 8080:8080`, or list defaults under `ports` in .seu/config.json");
     const status = await sessionStatus(instance);
     if (status !== 'running') LOG.info(`${sessionSandboxName(instance)} is ${status}`);
 }

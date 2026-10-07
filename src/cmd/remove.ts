@@ -4,6 +4,7 @@ import type { Command } from './command.ts';
 
 export const REMOVE: Command = {
     name: 'remove',
+    aliases: ['rm'],
     args: '[name] [options]',
     summary: 'delete a SEU: its sandboxes, its volume and its state',
 
@@ -16,7 +17,7 @@ It then asks you to type the SEU's name; --yes skips that, for scripts.
 What \`seu pull\` brought over is kept: the bundle stays in the state directory and the git remote \`seu-<name>\` keeps working, because commits you fetched but did not merge yet may exist only there. Drop it with \`git remote remove seu-<name>\` once merged.`,
 
     options: [
-        { flag: '--keep-volume', text: 'remove only the sandboxes; the next `seu start` re-installs into the kept volume' },
+        { flag: '--keep-volume', text: 'remove only the sandboxes; the next `seu start` creates a session over the kept volume' },
         { flag: '--yes, -y', text: 'do not ask for confirmation' },
         { flag: '--force', text: 'remove even when /work has changes or commits the host does not have' },
     ],

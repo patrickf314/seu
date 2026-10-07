@@ -19,5 +19,6 @@
   },
   "install": {
     "script": "mvn clean install -DskipTests -T1C && mvn exec:java --file club/club-ui/club-ui-test/pom.xml -e -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args=\"install-deps\""
-  }
+  },
+  "ports": [8080, "5173:5173"]
 }

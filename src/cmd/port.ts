@@ -9,7 +9,8 @@ export const PORT: Command = {
 
     details: `Makes something listening inside the VM reachable from the Mac. Without --name it forwards into the worktree's default SEU.
 
-  seu port                     list the active forwards
+  seu port                     forward the ports in .seu/config.json; lists when it names none
+  seu port --list              list the active forwards
   seu port 8080                shorthand for 8080:8080
   seu port 80:80 8080:8080     HOST:GUEST, like docker
   seu port 0.0.0.0:8080:8080   BIND:HOST:GUEST
@@ -18,7 +19,13 @@ The default bind is 127.0.0.1, so a forward is not published to your network unl
 
 A forward is an SSH tunnel against the live sandbox, not a published port: microsandbox fixes a sandbox's ports at creation, so publishing one would mean re-creating the session -- root disk gone, every running process killed -- every time you want to look at a dev server. A tunnel can be added or dropped at any moment and nothing in the VM restarts.
 
-They do NOT survive the sandbox stopping, and nothing recreates them: a tunnel into a stopped sandbox has nothing on the other end. Listing is the one mode that works on a stopped session, and it prunes the forwards that died with it.
+They do NOT survive the sandbox stopping, and nothing recreates them: a tunnel into a stopped sandbox has nothing on the other end. Listing (\`--list\`, or a bare \`seu port\` with no configured ports) is the one mode that works on a stopped session, and it prunes the forwards that died with it.
+
+Default ports go in .seu/config.json, in the same spec syntax:
+
+  "ports": [8080, "5173:5173", "0.0.0.0:9000:9000"]
+
+Ports that are already forwarded are left as they are, so running a bare \`seu port\` again is harmless.
 
 Every spec is validated before any tunnel starts, so a typo in the last one does not leave half of them up.`,
 
@@ -26,6 +33,7 @@ Every spec is validated before any tunnel starts, so a typo in the last one does
         { flag: '--name, -n <name>', text: 'the SEU to forward into; default: the worktree\'s directory name' },
         { flag: '--stop <host-port>', text: 'drop the forward on that host port; may be repeated' },
         { flag: '--stop-all', text: 'drop every forward of this SEU' },
+        { flag: '--list, -l', text: 'only list the active forwards, even when ports are configured' },
     ],
 
     async run(argv: string[]): Promise<void> {

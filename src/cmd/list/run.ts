@@ -15,7 +15,8 @@ import { die } from '../../common/error.ts';
 import { LOG } from '../../common/log.ts';
 import { resolveProject, STATE_ROOT } from '../../config/project.ts';
 import { listForwards } from '../../network/forward.ts';
-import { SRC_MOUNT } from '../../sandbox.ts';
+import { SRC_MOUNT, TEMPLATE_PREFIX } from '../../sandbox.ts';
+import { LABEL_IMAGE, LABEL_WORKTREE } from '../start/template.ts';
 
 interface Row {
     readonly name: string;
@@ -60,10 +61,35 @@ export async function run(argv: string[]): Promise<void> {
 
     if (rows.length === 0) {
         LOG.info(hereOnly ? 'no SEU for this worktree -- `seu start` makes one' : 'no SEUs -- `seu start` makes one');
-        return;
+    } else {
+        printTable(rows);
     }
 
-    printTable(rows);
+    if (!hereOnly) await printTemplates();
+}
+
+/**
+ * The project templates new SEUs are cloned from. Not SEUs -- no session, no
+ * /work anyone works in -- but disk that is worth knowing about.
+ */
+async function printTemplates(): Promise<void> {
+    const { Volume } = await sdk();
+    const templates = (await Volume.list())
+        .filter((v) => v.name.startsWith(TEMPLATE_PREFIX))
+        .map((v) => {
+            const labels = Object.fromEntries(v.labels);
+            return [v.name, labels[LABEL_IMAGE] ?? '?', labels[LABEL_WORKTREE] ?? '?'];
+        })
+        .sort((a, b) => a[0].localeCompare(b[0]));
+    if (templates.length === 0) return;
+
+    const rows = [['TEMPLATE', 'IMAGE', 'INSTALLED FROM'], ...templates];
+    const w0 = Math.max(...rows.map((r) => r[0].length));
+    const w1 = Math.max(...rows.map((r) => r[1].length));
+    process.stdout.write('\n');
+    for (const [name, image, worktree] of rows) {
+        process.stdout.write(`  ${name.padEnd(w0)}  ${image.padEnd(w1)}  ${worktree}\n`);
+    }
 }
 
 async function currentWorktree(): Promise<string | undefined> {
@@ -88,6 +114,8 @@ async function allSandboxes(): Promise<SandboxHandle[]> {
 }
 
 function toRow(sandbox: SandboxHandle, here: string | undefined): Row | undefined {
+    // A template's install sandbox is not a SEU; templates are listed apart.
+    if (sandbox.name.startsWith(TEMPLATE_PREFIX)) return undefined;
     const match = SANDBOX_NAME.exec(sandbox.name);
     if (match === null) return undefined;
     const [, install, name, hash] = match;

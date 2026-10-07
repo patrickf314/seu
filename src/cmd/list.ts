@@ -4,6 +4,7 @@ import type { Command } from './command.ts';
 
 export const LIST: Command = {
     name: 'list',
+    aliases: ['ls'],
     args: '[--here]',
     summary: 'list every SEU on this machine, with its worktree and port forwards',
 

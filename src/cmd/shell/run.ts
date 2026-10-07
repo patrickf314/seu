@@ -7,8 +7,8 @@
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
-import { requireSession } from '../../session.ts';
+import { type Instance, resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
+import { requireSession, type Session } from '../../session.ts';
 import { prepareWork, SRC_MOUNT, startDockerd, WORK_DIR } from '../../sandbox.ts';
 
 export async function run(argv: string[]): Promise<number> {
@@ -26,6 +26,14 @@ export async function run(argv: string[]): Promise<number> {
         await prepareWork(session.sandbox);
     }
 
+    return enterShell(instance, session);
+}
+
+/**
+ * Give the session a Docker daemon and hand the terminal over, until the shell
+ * ends. Also how `seu start` finishes.
+ */
+export async function enterShell(instance: Instance, session: Session): Promise<number> {
     LOG.step('Docker');
     const dockerd = await dockerDaemon(session.sandbox);
 

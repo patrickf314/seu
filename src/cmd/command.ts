@@ -6,17 +6,27 @@
 // command is called.
 
 export interface CommandOption {
-    /** As the user types it, e.g. `--no-host-m2`. */
+    /**
+     * As the user types it, e.g. `--no-host-m2`.
+     */
     readonly flag: string;
-    /** One sentence; wrapped by the help renderer. */
+
+    /**
+     * One sentence; wrapped by the help renderer.
+     */
     readonly text: string;
 }
 
 export interface Command {
     /**
      * The word after `seu`.
-     * */
+     */
     readonly name: string;
+
+    /**
+     * A list of aliases for the command
+     */
+    readonly aliases?: string[];
 
     /**
      * Argument shape for the usage line, e.g. `[options]`, `trace <path>`.

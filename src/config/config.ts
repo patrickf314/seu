@@ -37,12 +37,27 @@ const ImageReference = z
         'must be a docker image reference, e.g. postgres:18',
     );
 
+/** What `dependency:get` would take for a version if it came third. */
+const PACKAGINGS = new Set(['jar', 'pom', 'war', 'ear', 'maven-plugin', 'test-jar', 'zip', 'aar']);
+
 const MavenCoordinates = z
     .string()
     .regex(
         /^[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+){2,4}$/,
         'must be groupId:artifactId:version[:packaging[:classifier]]',
-    );
+    )
+    // The order Gradle and most docs print -- g:a:packaging:version -- is the
+    // wrong one here, and Maven's own complaint about it comes much later and
+    // much less clearly ("version jar not found").
+    .superRefine((c, ctx) => {
+        const [g, a, packaging, version, ...rest] = c.split(':');
+        if (!PACKAGINGS.has(packaging ?? '')) return;
+        const fixed = [g, a, version ?? '<version>', packaging, ...rest].join(':');
+        ctx.addIssue({
+            code: 'custom',
+            message: `the version comes third: groupId:artifactId:version[:packaging[:classifier]] -- did you mean ${fixed}?`,
+        });
+    });
 
 const DockerStep = z
     .object({
@@ -75,6 +90,16 @@ const PreInstallStepSchema = z.discriminatedUnion('type', [DockerStep, DockerCom
  * sandbox that is thrown away afterwards -- the host never sees it.
  */
 const InstallScript = z.string().min(1, 'must be a shell command');
+
+/**
+ * A `seu port` spec, as on the command line: `8080`, `"5173:5173"`,
+ * `"0.0.0.0:8080:8080"`. Only the shape is checked here; `seu port` parses it
+ * properly before any tunnel starts.
+ */
+const PortSpec = z.union([
+    z.number().int().transform(String),
+    z.string().regex(/^[0-9A-Za-z.*]+(:[0-9]+){0,2}(\/tcp)?$/i, 'must be a port spec, e.g. 8080 or "5173:5173"'),
+]);
 
 const SeuConfigSchema = z
     .object({
@@ -125,6 +150,12 @@ const SeuConfigSchema = z
             })
             .strict()
             .optional(),
+
+        /**
+         * What a bare `seu port` forwards: the project's usual dev servers, so
+         * nobody has to remember them.
+         */
+        ports: z.array(PortSpec).optional(),
     })
     .strict();
 
@@ -169,6 +200,12 @@ export interface SeuConfig {
          */
         readonly pom: string | undefined;
     };
+
+    /**
+     * Port specs a bare `seu port` forwards, unparsed; empty when the project
+     * names none.
+     */
+    readonly ports: readonly string[];
 }
 
 /**
@@ -196,15 +233,30 @@ export function loadConfig(project: Project): SeuConfig {
         playwright: {
             pom: config.playwright?.pom?.replace(/^\.\//, ''),
         },
+        ports: config.ports ?? [],
     };
 }
 
 function parse(file: string): SeuConfigFile {
+    let json: unknown;
     try {
-        return SeuConfigSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
+        json = JSON.parse(readFileSync(file, 'utf8'));
     } catch (err) {
         die(`${file}: not valid JSON\n    ${(err as Error).message}`);
     }
+
+    const result = SeuConfigSchema.safeParse(json);
+    if (result.success) return result.data;
+
+    // `image.pre-install[5].artifact: the version comes third ...`, one per
+    // problem: the path is what tells you which line of the file to look at.
+    const issues = result.error.issues.map((issue) => {
+        const path = issue.path
+            .map((key, i) => (typeof key === 'number' ? `[${key}]` : `${i === 0 ? '' : '.'}${String(key)}`))
+            .join('');
+        return `${path || '(top level)'}: ${issue.message}`;
+    });
+    die(`${file}: invalid\n    ${issues.join('\n    ')}`);
 }
 
 /**

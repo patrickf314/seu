@@ -4,10 +4,12 @@
 
 import type { ExecHandle, NetworkPolicyBuilder, Sandbox, SandboxStatus } from "microsandbox";
 import { sdk } from "./microsandbox/microsandboxSdk.ts";
-import { sleep } from "./host.ts";
+import { run, sleep } from "./host.ts";
 import { LOG } from "./common/log.ts";
 import { die } from "./common/error.ts";
-import type { Instance } from "./config/project.ts";
+import type { Instance, Project } from "./config/project.ts";
+import { dirname, join } from "node:path";
+import { existsSync, rmSync } from "node:fs";
 
 // The SDK types `SandboxBuilder.network()`'s callback argument as `any`, so the
 // builders reached through it carry no types of their own. These recover them
@@ -40,20 +42,59 @@ export const volumeName = (slug: string): string => `seu-${slug}-data`;
 /** The long-lived sandbox a developer works in. One per SEU instance. */
 export const sessionSandboxName = (instance: Instance): string => `seu-${instance.slug}`;
 
-/** The throwaway sandbox `seu start` installs in before the session exists. */
+/**
+ * The install sandbox an older `seu start` used per SEU. Installs now only
+ * ever happen into a template, but one of these can still be left over.
+ */
 export const installSandboxName = (instance: Instance): string => `seu-install-${instance.slug}`;
 
-export async function ensureVolume(instance: Instance): Promise<string> {
-  const name = volumeName(instance.slug);
+/** Prefix of everything template-related, so `seu list` can tell them apart. */
+export const TEMPLATE_PREFIX = "seu-template-";
+
+export async function volumeExists(name: string): Promise<boolean> {
   const { Volume } = await sdk();
-  const existing = await Volume.list();
-  if (existing.some((v) => v.name === name)) {
-    LOG.debug(`volume ${name} exists`);
-  } else {
-    await Volume.builder(name).disk().size(VOLUME_SIZE_MIB).create();
-    LOG.ok(`volume ${name} (${VOLUME_SIZE_MIB / 1024} GiB)`);
-  }
-  return name;
+  return (await Volume.list()).some((v) => v.name === name);
+}
+
+/** A fresh disk volume of the standard size. Fails if the name is taken. */
+export async function createVolume(name: string, labels: Record<string, string> = {}): Promise<string> {
+  const { Volume } = await sdk();
+  const builder = Volume.builder(name).disk().size(VOLUME_SIZE_MIB);
+  for (const [key, value] of Object.entries(labels)) builder.label(key, value);
+  const volume = await builder.create();
+  return volume.path;
+}
+
+/** Labels of a volume, or undefined when there is no such volume. */
+export async function volumeLabels(name: string): Promise<Record<string, string> | undefined> {
+  const { Volume } = await sdk();
+  const handle = (await Volume.list()).find((v) => v.name === name);
+  return handle === undefined ? undefined : Object.fromEntries(handle.labels);
+}
+
+/**
+ * Make `target` a copy of `source`, which must exist and must not be mounted.
+ *
+ * A disk volume is one raw ext4 image, `<volume dir>/disk.raw`. The target is
+ * created through the SDK -- so microsandbox knows it, with its size and labels
+ * -- and its empty image is then replaced by an APFS clone of the source's:
+ * instant, and sharing every block until one side writes to it. On a
+ * filesystem without clones `cp -c` fails and a plain copy is the fallback,
+ * slow and full-size but just as correct.
+ */
+export async function cloneVolume(source: string, target: string, labels: Record<string, string> = {}): Promise<void> {
+  const targetDir = await createVolume(target, labels);
+  const from = join(dirname(targetDir), source, "disk.raw");
+  const to = join(targetDir, "disk.raw");
+  if (!existsSync(from)) die(`no disk image for volume ${source} at ${from}`);
+
+  rmSync(to, { force: true });
+  if ((await run("cp", ["-c", from, to])).code === 0) return;
+
+  LOG.warn("this filesystem cannot clone files; copying the volume in full instead");
+  rmSync(to, { force: true });
+  const copy = await run("cp", [from, to]);
+  if (copy.code !== 0) die(`could not copy volume ${source} to ${target}: ${copy.stderr.trim()}`);
 }
 
 /**
@@ -245,7 +286,7 @@ export interface NetworkSpec {
    * interception (which is also what stops a hostname allow from being
    * domain-fronted), so the two are turned on together below.
    *
-   * Off for the install sandbox: interception would mean importing
+   * Off for the template's install sandbox: interception would mean importing
    * the microsandbox CA into the JDK truststore, because the JVM ignores the OS
    * trust store and Maven would fail every HTTPS fetch. Those are controlled,
    * one-shot steps, so a plain hostname allowlist is the right trade there.
@@ -257,7 +298,9 @@ export interface ProjectSandboxSpec {
   readonly name: string;
   /** Base image reference, already loaded into microsandbox's image store. */
   readonly image: string;
-  readonly instance: Instance;
+  readonly project: Project;
+  /** The named disk volume mounted at /seu. Created if it does not exist. */
+  readonly volume: string;
   readonly network: NetworkSpec;
   /**
    * The developer's own ~/.m2/repository, mounted read-only at /host-m2 as a
@@ -274,13 +317,12 @@ export interface ProjectSandboxSpec {
 
 /**
  * The one definition of how a seu sandbox is mounted and resourced. Every
- * sandbox of an instance sees the same /src, the same named volume and the same
+ * sandbox of a project sees the same /src, its named volume and the same
  * toolchain image; only the name, the egress policy and the lifetime differ.
  */
 export async function createProjectSandbox(spec: ProjectSandboxSpec): Promise<Sandbox> {
   const { Sandbox } = await sdk();
-  const { instance } = spec;
-  const { project } = instance;
+  const { project } = spec;
 
   const builder = Sandbox.builder(spec.name)
     .image(spec.image)
@@ -298,7 +340,7 @@ export async function createProjectSandbox(spec: ProjectSandboxSpec): Promise<Sa
       if (spec.network.strict) n.tls((t: TlsBuilder) => t.verifyUpstream(true));
       return n;
     })
-    .volume(VOLUME_MOUNT, (m) => m.namedWith(volumeName(instance.slug), "ensure-exists", "disk", VOLUME_SIZE_MIB))
+    .volume(VOLUME_MOUNT, (m) => m.namedWith(spec.volume, "ensure-exists", "disk", VOLUME_SIZE_MIB))
     .volume(SRC_MOUNT, (m) => m.bind(project.root).readonly());
 
   // A separate git dir (worktree, submodule) is mounted at its own absolute
@@ -368,11 +410,10 @@ export async function removeSandbox(name: string): Promise<void> {
   }
 }
 
-/** Remove the instance's named volume. False when there was none. */
-export async function removeVolume(instance: Instance): Promise<boolean> {
-  const name = volumeName(instance.slug);
+/** Remove a named volume. False when there was none. */
+export async function removeVolume(name: string): Promise<boolean> {
   const { Volume } = await sdk();
-  if (!(await Volume.list()).some((v) => v.name === name)) return false;
+  if (!(await volumeExists(name))) return false;
   try {
     await Volume.remove(name);
   } catch (err) {

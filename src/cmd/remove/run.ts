@@ -9,17 +9,17 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { run as spawn } from '../../host.ts';
 import { type Instance, resolveInstance, resolveProject, seuCommand, takeInstanceName } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
-import { sdk } from '../../microsandbox/microsandboxSdk.ts';
+import { requireSession } from '../../session.ts';
+import { guardUnsavedWork } from '../../work.ts';
 import {
-    exec,
     installSandboxName,
     removeSandbox,
     removeVolume,
     sandboxStatus,
     sessionSandboxName,
+    volumeExists,
     volumeName,
     WORK_DIR,
 } from '../../sandbox.ts';
@@ -62,7 +62,7 @@ export async function run(argv: string[]): Promise<void> {
 
     const sessionStatus = await sandboxStatus(session);
     const installStatus = await sandboxStatus(install);
-    const hasVolume = !opts.keepVolume && (await volumeExists(instance));
+    const hasVolume = !opts.keepVolume && (await volumeExists(volumeName(instance.slug)));
 
     if (sessionStatus === 'absent' && installStatus === 'absent' && !hasVolume) {
         die(`there is no SEU called ${instance.name} in this worktree -- \`seu list --here\` shows them`);
@@ -75,7 +75,7 @@ export async function run(argv: string[]): Promise<void> {
     if (opts.keepVolume) LOG.info('the volume is kept (--keep-volume)');
 
     // The volume is where unpulled work lives; with it kept, nothing is lost.
-    if (!opts.keepVolume) await guardUnsavedWork(instance, sessionStatus, opts.force);
+    if (!opts.keepVolume) await checkWork(instance, sessionStatus, opts.force);
     if (!opts.yes) await confirm(instance);
 
     if (installStatus !== 'absent') {
@@ -93,75 +93,27 @@ export async function run(argv: string[]): Promise<void> {
 
     if (opts.keepVolume) return;
 
-    if (await removeVolume(instance)) LOG.ok(`removed ${volumeName(instance.slug)}`);
+    if (await removeVolume(volumeName(instance.slug))) LOG.ok(`removed ${volumeName(instance.slug)}`);
     removeState(instance);
 }
 
-async function volumeExists(instance: Instance): Promise<boolean> {
-    const { Volume } = await sdk();
-    return (await Volume.list()).some((v) => v.name === volumeName(instance.slug));
-}
-
 /**
- * Refuse to destroy work that is only in /work: uncommitted changes, and
- * branches whose tip commit the host repository does not have.
- *
- * "Does the host have the commit" rather than "is it merged": a `seu pull`
- * fetches into the remote `seu-<name>`, and fetched is enough -- the commits
- * are safe on the host whether or not they have been merged yet.
+ * The volume is where unpulled work lives, so it is checked first. Only a
+ * running session can be looked into; starting one just to check it would be a
+ * surprise, so a stopped one is reported and left to the confirmation.
  */
-async function guardUnsavedWork(instance: Instance, status: string, force: boolean): Promise<void> {
+async function checkWork(instance: Instance, status: string, force: boolean): Promise<void> {
     if (status !== 'running') {
-        // The confirmation still stands between this and the volume; it just
-        // has to be given without the check behind it.
         LOG.warn(
             status === 'absent'
                 ? `no session sandbox to look into ${WORK_DIR} with -- it cannot be checked for unpulled work`
                 : `${sessionSandboxName(instance)} is ${status}, so ${WORK_DIR} cannot be checked for unpulled work ` +
-                      `-- \`${seuCommand(instance, 'start')}\` first to have it checked`,
+                      `-- \`${seuCommand(instance, 'start')} --detach\` first to have it checked`,
         );
         return;
     }
-
-    const { Sandbox } = await sdk();
-    // connect(), not start(): this process only looks, and must not take the
-    // sandbox's lifecycle with it.
-    const sandbox = await (await Sandbox.get(sessionSandboxName(instance))).connect();
-
-    const state = await exec(sandbox, {
-        cmd: 'bash',
-        args: ['-c', 'git status --porcelain && echo "--refs--" && git for-each-ref refs/heads --format="%(objectname) %(refname:short)"'],
-        user: 'seu',
-        cwd: WORK_DIR,
-        timeoutMs: 60_000,
-    });
-    if (!state.ok) {
-        LOG.warn(`could not inspect ${WORK_DIR}: ${(state.stderr || state.stdout).trim().split('\n').pop() ?? ''}`);
-        return;
-    }
-
-    const [porcelain, refs = ''] = state.stdout.split('--refs--\n');
-    const changes = porcelain.trim().split('\n').filter((l) => l !== '');
-
-    const unsaved: string[] = [];
-    for (const line of refs.trim().split('\n').filter((l) => l !== '')) {
-        const [sha, branch] = line.split(' ');
-        const known = await spawn('git', ['-C', instance.project.root, 'cat-file', '-e', `${sha}^{commit}`]);
-        if (known.code !== 0) unsaved.push(branch);
-    }
-
-    if (changes.length === 0 && unsaved.length === 0) {
-        LOG.ok(`${WORK_DIR} has nothing the host does not have`);
-        return;
-    }
-
-    if (changes.length > 0) LOG.warn(`${changes.length} uncommitted change(s) in ${WORK_DIR}`);
-    if (unsaved.length > 0) LOG.warn(`branches with commits the host does not have: ${unsaved.join(', ')}`);
-    if (force) {
-        LOG.warn('--force: discarding them');
-        return;
-    }
-    die(`${WORK_DIR} has work that exists only in this SEU -- commit and \`seu pull\` it first, or pass --force`);
+    const session = await requireSession(instance);
+    await guardUnsavedWork(instance, session.sandbox, force, 'remove');
 }
 
 /** Typing the name, not `y`: this is the step that loses a volume. */

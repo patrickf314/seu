@@ -1,82 +1,91 @@
-// The `seu start` flow: from a worktree to a running session, doing only what
-// is still missing -- base image, install, session.
+// The `seu start` flow: from a worktree to a shell in a running session, doing
+// only what is still missing.
 //
-// Two sandboxes, because a sandbox's network policy is fixed at creation. The
-// pre-install and `install.script` resolve dependencies, so they need egress,
-// and the session must have none beyond Anthropic. One sandbox cannot be both,
-// so the install runs in a throwaway sandbox under the BUILD policy, writes
-// everything it fetches into the instance's named volume, and is destroyed
-// before the session is created over that same volume.
+//   session exists          -> resume it
+//   SEU volume exists       -> a new session over it
+//   neither                 -> clone the project's template into a new volume,
+//                              building the template first if there is none
+//
+// and then, unless --detach, straight into the shell.
+//
+// The template (src/cmd/start/template.ts) is where installing happens: in a
+// throwaway sandbox with egress, once per project. A SEU itself never installs
+// anything; its session only ever has the Anthropic-only policy.
 //
 // Kept apart from the command const in src/cmd/start.ts so that loading the
 // command set does not load the microsandbox SDK: `seu help` has to work on a
 // checkout with no node_modules, and this module is only imported once a start
 // actually happens.
 
-import type { ExecHandle, Sandbox, SandboxStatus } from 'microsandbox';
+import type { SandboxStatus } from 'microsandbox';
 import { type MicrosandboxSdk, sdk } from '../../microsandbox/microsandboxSdk.ts';
 import { CONFIG_FILE, loadConfig, type SeuConfig } from '../../config/config.ts';
 import { succeeds } from '../../host.ts';
 import { buildBaseImage, imageLoaded, imageTag } from './image.ts';
-import { runPreInstall } from './pre-install.ts';
+import { obtainTemplate, type Template } from './template.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { buildNetworkPolicy, sessionNetworkPolicy } from '../../network/net.ts';
-import { type Instance, resolveInstance, resolveProject, seuCommand, takeInstanceName } from '../../config/project.ts';
-import { declareHostRepository, hostRepository, sealForOffline } from '../../maven/hostRepository.ts';
+import { sessionNetworkPolicy } from '../../network/net.ts';
+import {
+    type Instance,
+    type Project,
+    resolveInstance,
+    resolveProject,
+    seuCommand,
+    takeInstanceName,
+} from '../../config/project.ts';
+import { requireSession, type Session } from '../../session.ts';
+import { guardUnsavedWork, syncWorkToSource } from '../../work.ts';
+import { enterShell } from '../shell/run.ts';
+import { stopAllForwards } from '../../network/forward.ts';
 import {
     bootstrapVolume,
+    cloneVolume,
     createProjectSandbox,
-    destroySandbox,
-    ensureVolume,
-    exec,
     installSandboxName,
     prepareWork,
+    removeSandbox,
+    removeVolume,
     sandboxStatus,
     sessionSandboxName,
-    startDockerd,
-    startSandbox,
-    stopSandbox,
+    volumeExists,
+    volumeName,
     waitForAgent,
     WORK_DIR,
 } from '../../sandbox.ts';
 
-/**
- * A full `mvn clean install` on a large reactor is a long hour on a cold cache,
- * and the alternative to a generous budget is killing a build that would have
- * finished. The watchdog is only here so a wedged step cannot hang forever.
- */
-const INSTALL_TIMEOUT_MS = 90 * 60_000;
-
 interface StartOptions {
     name: string | undefined;
-    rebuild: boolean;
     reinstall: boolean;
+    force: boolean;
     hostM2: boolean;
+    detach: boolean;
 }
 
 function parseArgs(argv: string[]): StartOptions {
     const { name, rest } = takeInstanceName(argv);
-    const opts: StartOptions = { name, rebuild: false, reinstall: false, hostM2: true };
+    const opts: StartOptions = { name, reinstall: false, force: false, hostM2: true, detach: false };
 
     for (const arg of rest) {
         switch (arg) {
-            case '--rebuild':
-                // A new toolchain under an old install is the mismatch a
-                // rebuild exists to get rid of.
-                opts.rebuild = true;
-                opts.reinstall = true;
-                break;
             case '--reinstall':
                 opts.reinstall = true;
                 break;
+            case '--force':
+                opts.force = true;
+                break;
             case '--no-host-m2':
                 opts.hostM2 = false;
+                break;
+            case '--detach':
+            case '-d':
+                opts.detach = true;
                 break;
             default:
                 die(arg.startsWith('-') ? `unknown option for start: ${arg}` : `start takes one name, not ${arg}`);
         }
     }
+    if (opts.force && !opts.reinstall) die('--force only means something with --reinstall');
     return opts;
 }
 
@@ -89,7 +98,7 @@ function validateMicroSandbox(resolveRuntime: MicrosandboxSdk['resolveRuntime'])
     }
 }
 
-export async function run(argv: string[]): Promise<void> {
+export async function run(argv: string[]): Promise<number> {
     const { resolveRuntime } = await sdk();
 
     const opts = parseArgs(argv);
@@ -109,32 +118,41 @@ export async function run(argv: string[]): Promise<void> {
 
     if (!opts.reinstall && status !== 'absent') {
         await warnOnStaleImage(name, tag);
-        await resume(instance, name, status);
-        return;
+        return enter(instance, await resume(instance, status), opts);
+    }
+
+    // Before anything is rebuilt: a reinstall replaces this SEU's volume, and
+    // the check is cheapest to fail early.
+    if (opts.reinstall && status !== 'absent') {
+        LOG.step(`Checking ${WORK_DIR} of ${name}`);
+        const session = await requireSession(instance);
+        await guardUnsavedWork(instance, session.sandbox, opts.force, 'reinstall');
     }
 
     LOG.step('Base image');
-    await ensureImage(tag, config, instance, opts.rebuild);
+    await ensureImage(tag, config, instance, opts.reinstall);
 
-    if (status === 'running') {
-        // Two sandboxes must not mount one disk volume at the same time, and the
-        // install sandbox needs this one.
-        LOG.step(`Stopping ${name}`);
-        await stopSandbox(name);
-        LOG.ok(`${name} stopped`);
+    const volume = volumeName(instance.slug);
+    if (!opts.reinstall && (await volumeExists(volume))) {
+        // A SEU whose session was removed but whose volume was kept
+        // (`seu remove --keep-volume`): everything is still in there.
+        LOG.step('Volume');
+        LOG.ok(`reusing ${volume}`);
+        return enter(instance, await startSession(tag, instance, false), opts);
     }
 
-    LOG.step('Named volume');
-    await ensureVolume(instance);
+    const template = await ensureTemplate(tag, project, config, opts);
 
-    if (config.image.preInstall.length === 0 && config.install.script === undefined) {
-        LOG.step('Install');
-        LOG.debug(`no image.pre-install and no install.script in ${CONFIG_FILE} -- starting the session straight away`);
-    } else {
-        await install(tag, instance, config, opts);
-    }
+    // Only now, with the new template in hand: a reinstall that fails on the
+    // way leaves the SEU as it was.
+    if (opts.reinstall) await discardSeu(instance);
 
-    await startSession(tag, instance, name);
+    LOG.step(`Cloning ${template.volume}`);
+    const started = Date.now();
+    await cloneVolume(template.volume, volume);
+    LOG.ok(`${volume} (${Date.now() - started} ms)`);
+
+    return enter(instance, await startSession(tag, instance, true), opts);
 }
 
 /**
@@ -143,7 +161,7 @@ export async function run(argv: string[]): Promise<void> {
  */
 async function ensureImage(tag: string, config: SeuConfig, instance: Instance, rebuild: boolean): Promise<void> {
     if (!rebuild && (await imageLoaded(tag))) {
-        LOG.ok(`${tag} already loaded (pass --rebuild to force)`);
+        LOG.ok(`${tag} already loaded`);
         return;
     }
 
@@ -151,6 +169,41 @@ async function ensureImage(tag: string, config: SeuConfig, instance: Instance, r
         die('host Docker is not reachable -- needed to build the base image');
     }
     await buildBaseImage(tag, config, instance.stateDir, instance.project.root);
+}
+
+/**
+ * The project's template, built when there is none -- or always on
+ * --reinstall, which is how a changed install, toolchain or dependency set
+ * gets into it.
+ */
+async function ensureTemplate(tag: string, project: Project, config: SeuConfig, opts: StartOptions): Promise<Template> {
+    const { template: existing, built } = await obtainTemplate(tag, project, config, {
+        rebuild: opts.reinstall,
+        hostM2: opts.hostM2,
+    });
+    if (built) return existing;
+
+    LOG.step('Template');
+    LOG.ok(`${existing.volume}${existing.worktree ? ` (installed from ${existing.worktree})` : ''}`);
+    if (existing.image !== undefined && existing.image !== tag) {
+        LOG.warn(`it was installed with ${existing.image}, the toolchain is now ${tag}`);
+        LOG.warn('    `seu start --reinstall` rebuilds it');
+    }
+    return existing;
+}
+
+/** This SEU's session, any leftover install sandbox, its forwards and its volume. */
+async function discardSeu(instance: Instance): Promise<void> {
+    const session = sessionSandboxName(instance);
+    const volume = volumeName(instance.slug);
+    if ((await sandboxStatus(session)) === 'absent' && !(await volumeExists(volume))) return;
+
+    LOG.step(`Discarding the current ${session}`);
+    await removeSandbox(installSandboxName(instance));
+    await removeSandbox(session);
+    stopAllForwards(instance);
+    await removeVolume(volume);
+    LOG.ok(`removed ${session} and ${volume}`);
 }
 
 /**
@@ -168,7 +221,7 @@ async function warnOnStaleImage(name: string, tag: string): Promise<void> {
         return;
     }
     if (current !== undefined && current !== tag) {
-        LOG.warn(`${name} runs on ${current}; the toolchain is now ${tag} -- \`seu start --rebuild\` to move over`);
+        LOG.warn(`${name} runs on ${current}; the toolchain is now ${tag} -- \`seu start --reinstall\` to move over`);
     }
 }
 
@@ -176,166 +229,36 @@ async function warnOnStaleImage(name: string, tag: string): Promise<void> {
  * A sandbox that already exists keeps its root disk, its narrowed policy and
  * everything in the volume; it only has to be running again.
  *
- * `bootstrapVolume` and `prepareWork` still run: they are idempotent, and they
- * are what repairs a session whose first start was interrupted before /work was
- * cloned.
+ * `prepareWork` still runs after a resume: it is idempotent, and it is what
+ * repairs a session whose first start was interrupted before /work was cloned.
  */
-async function resume(instance: Instance, name: string, status: SandboxStatus): Promise<void> {
+async function resume(instance: Instance, status: SandboxStatus): Promise<Session> {
     if (status === 'running') {
         LOG.step('Session sandbox');
-        LOG.ok(`${name} is already running (pass --reinstall to install again)`);
-        LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in`);
-        return;
+        LOG.ok(`${sessionSandboxName(instance)} is already running (pass --reinstall to install again)`);
     }
 
-    LOG.step(`Starting ${name} (${status})`);
-    const sandbox = await startSandbox(name);
-    await waitForAgent(sandbox);
-    await bootstrapVolume(sandbox);
-    await prepareWork(sandbox);
-    ready(instance, name);
+    const session = await requireSession(instance);
+    if (session.resumed) await prepareWork(session.sandbox);
+    return session;
 }
 
 /**
- * Pre-install and `install.script`, in one throwaway sandbox with build egress.
- *
- * Everything it writes goes into the named volume -- /work, ~/.m2, ~/.cache and
- * /seu/docker are all in there -- so what it fetches is exactly what the
- * offline session gets. Anything it leaves outside /seu dies with this sandbox.
- */
-async function install(tag: string, instance: Instance, config: SeuConfig, opts: StartOptions): Promise<void> {
-    const steps = config.image.preInstall;
-    const script = config.install.script;
-
-    LOG.step('Host Maven repository');
-    const hostM2 = hostRepository(opts.hostM2);
-
-    LOG.step('Creating the install sandbox (wide network egress)');
-    const sandbox = await createProjectSandbox({
-        name: installSandboxName(instance),
-        image: tag,
-        instance,
-        network: { policy: await buildNetworkPolicy(), strict: false },
-        hostRepository: hostM2,
-        // Throwaway: it must not outlive this command, and the teardown below
-        // is what guarantees the named volume is free again afterwards.
-        detached: false,
-    });
-    LOG.ok('Created VM for install phase');
-
-    let dockerd: ExecHandle | undefined = undefined;
-    const teardown = async (): Promise<void> => {
-        await dockerd?.kill().catch(() => {});
-        dockerd = undefined;
-
-        await destroySandbox(sandbox);
-        LOG.ok('Removed VM of install phase');
-    };
-
-    const onSignal = (): void => {
-        void teardown().finally(() => process.exit(130));
-    };
-
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
-
-    try {
-        await waitForAgent(sandbox);
-        await bootstrapVolume(sandbox);
-
-        if (hostM2 !== undefined) await declareHostRepository(sandbox);
-
-        // dockerd is the slow part of the boot. Pulling images needs it; the
-        // script gets it unconditionally, because a build command is opaque to
-        // us, and the ones that want Docker (Testcontainers, buildpacks, a
-        // compose file started by a test) fail in ways that point anywhere but
-        // at a missing daemon. Only a profile that just resolves Maven
-        // artifacts goes without.
-        if (script !== undefined || steps.some((s) => s.type === 'docker' || s.type === 'docker-compose')) {
-            LOG.step('Starting dockerd in the install sandbox');
-            dockerd = await startDockerd(sandbox);
-        }
-
-        if (steps.length > 0) {
-            LOG.step('Pre-Install');
-            await runPreInstall(sandbox, steps);
-        }
-
-        if (script !== undefined) {
-            LOG.step(`Preparing ${WORK_DIR}`);
-            await prepareWork(sandbox);
-            await runInstallScript(sandbox, script);
-        }
-
-        // Before the sandbox -- and with it /host-m2 -- goes away. What was just
-        // resolved is unusable offline until its origin is forgotten.
-        if (hostM2 !== undefined) {
-            LOG.step('Handing the repository over');
-            await sealForOffline(sandbox);
-        }
-    } finally {
-        process.removeListener('SIGINT', onSignal);
-        process.removeListener('SIGTERM', onSignal);
-        await teardown();
-    }
-}
-
-async function runInstallScript(sandbox: Sandbox, script: string): Promise<void> {
-    LOG.step('Running install.script');
-    LOG.debug(`${WORK_DIR}$ ${script}`);
-    warnOnRootWork(script);
-
-    const result = await exec(sandbox, {
-        // The script IS a shell command -- see InstallScript in
-        // src/config/config.ts. It runs as `seu`, in a sandbox that is
-        // destroyed right after, and never on the host.
-        cmd: 'bash',
-        args: ['-lc', script],
-        user: 'seu',
-        cwd: WORK_DIR,
-        timeoutMs: INSTALL_TIMEOUT_MS,
-        stream: true,
-    });
-
-    if (!result.ok) {
-        die(
-            result.timedOut
-                ? `install.script did not finish within ${INSTALL_TIMEOUT_MS / 60_000} minutes`
-                : `install.script failed (exit ${result.code})`,
-        );
-    }
-    LOG.ok('install.script finished');
-}
-
-/**
- * The install runs as `seu`, in a sandbox whose rootfs is thrown away. A step
- * that wants root is therefore wrong twice over, and the way it announces
- * itself -- a sudo password prompt on a VM with no password -- says neither.
- *
- * A warning rather than a refusal: the script is the project's business, and a
- * `docker run` of something that happens to contain the word apt-get is nobody
- * else's. But it names the fix, which is the part that is hard to guess.
- */
-function warnOnRootWork(script: string): void {
-    const needsRoot = /\b(sudo|apt-get|apt-key|install-deps)\b/.exec(script);
-    if (needsRoot === null) return;
-
-    LOG.warn(`install.script contains \`${needsRoot[0]}\`, which wants root`);
-    LOG.warn('    this runs as `seu`, and anything outside /seu dies with this sandbox');
-    LOG.warn('    system packages belong in vm/Dockerfile -- they are baked into the base image');
-}
-
-/**
- * The session itself: the same volume, the same image, the narrowed policy, and
- * a lifetime of its own -- it is detached, so it stays up when this command
+ * The session itself: the SEU's volume, the image, the narrowed policy, and a
+ * lifetime of its own -- it is detached, so it stays up when this command
  * returns.
+ *
+ * `fromTemplate`: the volume is a fresh clone, whose /work still sits on the
+ * worktree and commit the template was installed from.
  */
-async function startSession(tag: string, instance: Instance, name: string): Promise<void> {
+async function startSession(tag: string, instance: Instance, fromTemplate: boolean): Promise<Session> {
+    const name = sessionSandboxName(instance);
     LOG.step(`Creating ${name} (egress: Anthropic only)`);
     const sandbox = await createProjectSandbox({
         name,
         image: tag,
-        instance,
+        project: instance.project,
+        volume: volumeName(instance.slug),
         network: { policy: await sessionNetworkPolicy(), strict: true },
         detached: true,
     });
@@ -345,16 +268,21 @@ async function startSession(tag: string, instance: Instance, name: string): Prom
 
     LOG.step(`Preparing ${WORK_DIR}`);
     await prepareWork(sandbox);
+    if (fromTemplate) await syncWorkToSource(sandbox);
 
-    ready(instance, name);
+    LOG.ok(`${name} is running with the session network policy`);
+    return { name, sandbox, resumed: false };
 }
 
-function ready(instance: Instance, name: string): void {
-    LOG.step('Up');
-    LOG.ok(`${name} is running with the session network policy`);
-    LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
-    // dockerd lives in the foreground of a host-side exec (see
-    // vm/dockerd-run.sh), and that exec dies with the process that opened it.
-    // `start` has to return, so it cannot be the one supervising it.
-    LOG.debug('dockerd is started by `seu shell`, which stays attached for the session');
+/**
+ * Into the shell, unless asked not to -- or unless there is no terminal to hand
+ * over, in which case the session is up and the way in is printed instead.
+ */
+async function enter(instance: Instance, session: Session, opts: StartOptions): Promise<number> {
+    if (opts.detach || !process.stdin.isTTY) {
+        LOG.step('Up');
+        LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
+        return 0;
+    }
+    return enterShell(instance, session);
 }

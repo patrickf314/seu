@@ -27,6 +27,11 @@ export const COMMANDS: readonly Command[] = [
     HELP,
 ];
 
+/**
+ * Finds a command by its name or alias
+ *
+ * @param name the name to search for
+ */
 export function findCommand(name: string): Command | undefined {
-    return COMMANDS.find((c) => c.name === name);
+    return COMMANDS.find((c) => c.name === name || c.aliases?.includes(name) === true);
 }
