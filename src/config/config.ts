@@ -12,7 +12,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
 import type { Project } from './project.ts';
 
@@ -127,8 +126,9 @@ const SeuConfigSchema = z
                  */
                 tag: RepositoryName.optional(),
                 /**
-                 * The mise toolchain file to bake into the image. Default
-                 * `./mise.toml`; a project without one gets no managed JDK/Maven.
+                 * The mise toolchain file `seu start` installs into the
+                 * template. Default `./mise.toml`; a project without one gets
+                 * no managed JDK/Maven.
                  */
                 'mise-toml': ProjectPath.optional(),
                 /**
@@ -197,9 +197,9 @@ export interface SeuConfig {
         readonly tag: string;
 
         /**
-         * Absolute path of the mise config, or null when there is none.
+         * Absolute path of the mise config, or undefined when there is none.
          */
-        readonly miseToml: string;
+        readonly miseToml: string | undefined;
 
         /**
          * In declaration order; empty when the project pre-installs nothing.
@@ -303,19 +303,15 @@ function defaultTag(project: Project): string {
 
 /**
  * Configured-but-absent is a typo, not a project without a toolchain, so it
- * warns rather than silently producing a JDK-less image. The default path
+ * fails rather than silently producing a JDK-less template. The default path
  * missing simply means this project manages no toolchain.
  */
-function resolveMiseToml(project: Project, file: string, configured: string | undefined): string {
+function resolveMiseToml(project: Project, file: string, configured: string | undefined): string | undefined {
     const rel = (configured ?? DEFAULT_MISE_TOML).replace(/^\.\//, '');
     const path = join(project.root, rel);
     if (existsSync(path) && statSync(path).isFile()) {
         return path;
     }
 
-    if (configured !== undefined) {
-        LOG.warn(`${file}: image.mise-toml points at ${configured}, which does not exist`);
-    }
-
-    die(`Missing mise.toml: ${DEFAULT_MISE_TOML} is the default, or configure image.mise-toml to point at a valid file.`);
+    return undefined;
 }

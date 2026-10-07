@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { runInherit, runOk } from '../../host.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import type { SeuConfig } from '../../config/config.ts';
 import { SEU_ROOT } from '../../config/project.ts';
 import { sdk } from '../../microsandbox/microsandboxSdk.ts';
 
@@ -22,29 +21,29 @@ const IMAGE_INPUTS = [
 ];
 
 /**
- * `<name>:<hash of the inputs>`. Only files that actually exist are hashed: a
- * project without a mise config is legitimate.
+ * One repository for every project: nothing project-specific goes into the
+ * image any more -- the toolchain is installed into each project's template
+ * (src/cmd/start/toolchain.ts) -- so every project runs on the same image.
  */
-export function imageTag(config: SeuConfig): string {
-    const files = IMAGE_INPUTS.map((f) => join(SEU_ROOT, f));
-    if (config.image.miseToml) files.push(config.image.miseToml);
+const IMAGE_REPOSITORY = 'seu';
 
+/** `seu:<hash of the inputs>`. */
+export function imageTag(): string {
     const h = createHash('sha256');
-    for (const f of files) {
+    for (const f of IMAGE_INPUTS.map((f) => join(SEU_ROOT, f))) {
         if (!existsSync(f)) die(`missing image input: ${f}`);
         h.update(readFileSync(f));
     }
-    return `${config.image.tag}:${h.digest('hex').slice(0, 12)}`;
+    return `${IMAGE_REPOSITORY}:${h.digest('hex').slice(0, 12)}`;
 }
 
 /**
  * True when exactly this reference is in microsandbox's image store.
  *
- * Must match the FULL reference, name included: the hash covers only the image
- * inputs, which are identical across worktrees of the same repo, so a hash-only
- * test matches a sibling worktree's image. Sandbox creation would then be
- * handed a name that is not in the store and silently fall back to pulling it
- * from docker.io -- which fails with "Not authorized".
+ * Must match the FULL reference, name included: a hash-only test would match
+ * an image some older seu loaded under another name. Sandbox creation would
+ * then be handed a name that is not in the store and silently fall back to
+ * pulling it from docker.io -- which fails with "Not authorized".
  */
 export async function imageLoaded(reference: string): Promise<boolean> {
     const { Image } = await sdk();
@@ -55,24 +54,14 @@ export async function imageLoaded(reference: string): Promise<boolean> {
 /**
  * Build the base image on the host and import it into microsandbox.
  *
- * The build context is staged: the vm/ files plus the repo's own mise config,
- * so the image toolchain always matches what the project's build validates.
+ * The build context is staged from the vm/ files alone.
  */
-export async function buildBaseImage(
-    tag: string,
-    config: SeuConfig,
-    stateDir: string,
-    projectRoot: string,
-): Promise<void> {
+export async function buildBaseImage(tag: string, stateDir: string): Promise<void> {
     const ctx = mkdtempSync(join(tmpdir(), 'seu-ctx-'));
     try {
         for (const f of ['Dockerfile', 'dockerd-run.sh', 'session-init.sh', 'claude-settings.json']) {
             copyFileSync(join(SEU_ROOT, 'vm', f), join(ctx, f));
         }
-
-        const mise = config.image.miseToml;
-        copyFileSync(mise, join(ctx, 'mise.toml'));
-        LOG.debug(`toolchain from ${mise.startsWith(`${projectRoot}/`) ? mise.slice(projectRoot.length + 1) : mise}`);
 
         const args = ['build', '--provenance=false', '--sbom=false', '--platform', 'linux/arm64', '-t', tag, ctx];
         if ((await runInherit('docker', args)) !== 0) {

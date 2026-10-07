@@ -23,6 +23,7 @@ import { CONFIG_FILE, loadConfig, type SeuConfig } from '../../config/config.ts'
 import { succeeds } from '../../host.ts';
 import { buildBaseImage, imageLoaded, imageTag } from './image.ts';
 import { obtainTemplate, type Template } from './template.ts';
+import { toolchainFingerprint } from './toolchain.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { sessionNetworkPolicy } from '../../network/net.ts';
@@ -113,7 +114,7 @@ export async function run(argv: string[]): Promise<number> {
     LOG.ok(`SEU ${instance.name} (${name})`);
     LOG.ok(config.file === undefined ? `no ${CONFIG_FILE} -- using defaults` : `profile  ${CONFIG_FILE}`);
 
-    const tag = imageTag(config);
+    const tag = imageTag();
     const status = await sandboxStatus(name);
 
     if (!opts.reinstall && status !== 'absent') {
@@ -130,7 +131,7 @@ export async function run(argv: string[]): Promise<number> {
     }
 
     LOG.step('Base image');
-    await ensureImage(tag, config, instance, opts.reinstall);
+    await ensureImage(tag, instance, opts.reinstall);
 
     const volume = volumeName(instance.slug);
     if (!opts.reinstall && (await volumeExists(volume))) {
@@ -159,7 +160,7 @@ export async function run(argv: string[]): Promise<number> {
  * Host Docker is only needed when there is something to build, so a start on
  * a machine whose Docker is down still works as long as the image is loaded.
  */
-async function ensureImage(tag: string, config: SeuConfig, instance: Instance, rebuild: boolean): Promise<void> {
+async function ensureImage(tag: string, instance: Instance, rebuild: boolean): Promise<void> {
     if (!rebuild && (await imageLoaded(tag))) {
         LOG.ok(`${tag} already loaded`);
         return;
@@ -168,7 +169,7 @@ async function ensureImage(tag: string, config: SeuConfig, instance: Instance, r
     if (!(await succeeds('docker', ['info']))) {
         die('host Docker is not reachable -- needed to build the base image');
     }
-    await buildBaseImage(tag, config, instance.stateDir, instance.project.root);
+    await buildBaseImage(tag, instance.stateDir);
 }
 
 /**
@@ -186,7 +187,11 @@ async function ensureTemplate(tag: string, project: Project, config: SeuConfig, 
     LOG.step('Template');
     LOG.ok(`${existing.volume}${existing.worktree ? ` (installed from ${existing.worktree})` : ''}`);
     if (existing.image !== undefined && existing.image !== tag) {
-        LOG.warn(`it was installed with ${existing.image}, the toolchain is now ${tag}`);
+        LOG.warn(`it was installed with ${existing.image}, the image is now ${tag}`);
+        LOG.warn('    `seu start --reinstall` rebuilds it');
+    }
+    if (existing.toolchain !== undefined && existing.toolchain !== toolchainFingerprint(config)) {
+        LOG.warn('it was installed with a different mise.toml');
         LOG.warn('    `seu start --reinstall` rebuilds it');
     }
     return existing;
@@ -221,7 +226,7 @@ async function warnOnStaleImage(name: string, tag: string): Promise<void> {
         return;
     }
     if (current !== undefined && current !== tag) {
-        LOG.warn(`${name} runs on ${current}; the toolchain is now ${tag} -- \`seu start --reinstall\` to move over`);
+        LOG.warn(`${name} runs on ${current}; the image is now ${tag} -- \`seu start --reinstall\` to move over`);
     }
 }
 

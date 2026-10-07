@@ -27,6 +27,7 @@ import { sleep } from '../../host.ts';
 import { buildNetworkPolicy } from '../../network/net.ts';
 import { declareHostRepository, hostRepository, sealForOffline } from '../../maven/hostRepository.ts';
 import { runPreInstall } from './pre-install.ts';
+import { installToolchain, toolchainFingerprint } from './toolchain.ts';
 import {
     bootstrapVolume,
     createProjectSandbox,
@@ -53,6 +54,7 @@ const INSTALL_TIMEOUT_MS = 90 * 60_000;
 /** Volume labels: what a template was built from, for `seu list` and staleness. */
 export const LABEL_IMAGE = 'seu.image';
 export const LABEL_WORKTREE = 'seu.worktree';
+export const LABEL_TOOLCHAIN = 'seu.toolchain';
 
 export interface Template {
     /** The template volume. */
@@ -61,6 +63,8 @@ export interface Template {
     readonly image: string | undefined;
     /** The worktree whose install produced it, from its label. */
     readonly worktree: string | undefined;
+    /** The mise.toml it was installed with, as `toolchainFingerprint`. */
+    readonly toolchain: string | undefined;
 }
 
 /** `seu-template-<image repository>`, with a `/` in the repository made a `-`. */
@@ -75,7 +79,12 @@ export async function findTemplate(config: SeuConfig): Promise<Template | undefi
     const volume = templateVolumeName(config);
     const labels = await volumeLabels(volume);
     if (labels === undefined) return undefined;
-    return { volume, image: labels[LABEL_IMAGE], worktree: labels[LABEL_WORKTREE] };
+    return {
+        volume,
+        image: labels[LABEL_IMAGE],
+        worktree: labels[LABEL_WORKTREE],
+        toolchain: labels[LABEL_TOOLCHAIN],
+    };
 }
 
 /**
@@ -170,7 +179,8 @@ async function buildTemplate(image: string, project: Project, config: SeuConfig,
     LOG.debug(`installed once from ${project.root}; every new SEU of this project starts as a copy of it`);
     await removeSandbox(sandboxName);
     if (await removeVolume(volume)) LOG.ok(`removed the previous ${volume}`);
-    await createVolume(volume, { [LABEL_IMAGE]: image, [LABEL_WORKTREE]: project.root });
+    const toolchain = toolchainFingerprint(config);
+    await createVolume(volume, { [LABEL_IMAGE]: image, [LABEL_WORKTREE]: project.root, [LABEL_TOOLCHAIN]: toolchain });
 
     const discard = async (): Promise<void> => {
         await removeVolume(volume).catch(() => false);
@@ -185,11 +195,12 @@ async function buildTemplate(image: string, project: Project, config: SeuConfig,
     }
 
     LOG.ok(`template ${volume} ready`);
-    return { volume, image, worktree: project.root };
+    return { volume, image, worktree: project.root, toolchain };
 }
 
 /**
- * Pre-install and `install.script`, in one throwaway sandbox with build egress.
+ * Toolchain, pre-install and `install.script`, in one throwaway sandbox with
+ * build egress.
  *
  * Everything it writes goes into the volume -- /work, ~/.m2, ~/.cache and
  * /seu/docker are all in there -- so what it fetches is exactly what an offline
@@ -253,6 +264,10 @@ async function install(
         // Always: the template's /work is what every SEU's /work starts from.
         LOG.step(`Preparing ${WORK_DIR}`);
         await prepareWork(sandbox);
+
+        // Before anything that runs a project tool: pre-install's Maven steps
+        // and the script both expect the project's JDK and Maven on PATH.
+        await installToolchain(sandbox, config);
 
         // dockerd is the slow part of the boot. Pulling images needs it; the
         // script gets it unconditionally, because a build command is opaque to

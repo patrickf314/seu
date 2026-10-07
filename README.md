@@ -69,7 +69,8 @@ worktrees of a repository share the template, since they share `image.tag`.
 
 The template is built by the first `seu start` that needs one: base image (if
 not loaded), then a throwaway install sandbox with wide egress over the
-template volume, running the pre-install and `install.script`. A build that
+template volume, running `mise install` for the project's `mise.toml`, the
+pre-install and `install.script`. A build that
 fails or is interrupted removes its half-built volume.
 
 `seu start --reinstall` rebuilds the base image and the template from the
@@ -158,8 +159,8 @@ Every key is optional, and so is the file:
 
 | key | default | what it does |
 | --- | --- | --- |
-| `image.tag` | the worktree's directory name | base-image repository name, so two repositories never share (and invalidate) each other's image. The hash of the image inputs is appended to it. |
-| `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
+| `image.tag` | the worktree's directory name | names the project's template, `seu-template-<image.tag>`. The base image itself is shared by every project: `seu:<hash of vm/*>`. |
+| `image.mise-toml` | `./mise.toml` | the toolchain `seu start` installs into the template (`mise install`, into `/seu/mise` on the volume) before the pre-install. A project without one gets no managed JDK/Maven; a configured path that does not exist is an error. |
 | `image.pre-install` | nothing | what `seu start` fetches into the template volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
 | `install.script` | nothing | what `seu start` runs in the template's `/work` to make the checkout buildable. See below. |
 | `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
@@ -957,8 +958,8 @@ lib/common.sh               the bash half's identity, volumes, dockerd
     conf-get.py             reads one key out of .seu/config.json, for bash
     maven-settings.py       generates the in-VM settings.xml
     claude-config.py        projects your ~/.claude setup onto the VM
-vm/Dockerfile               base image (FROM jdxcode/mise:debian): toolchain +
-                            docker + Claude Code + ccstatusline
+vm/Dockerfile               base image (FROM jdxcode/mise:debian), shared by all
+                            projects: mise + docker + Claude Code + ccstatusline
    dockerd-run.sh           foreground dockerd (see notes above)
    session-init.sh          clone /src -> /work
    warm.sh                  the whole `seu build` warm-up

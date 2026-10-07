@@ -109,7 +109,7 @@ export async function bootstrapVolume(sandbox: Sandbox): Promise<void> {
     cmd: "sh",
     args: [
       "-c",
-      "mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker && chown seu:seu /seu /seu/work /seu/m2 /seu/cache",
+      "mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /seu/mise && chown seu:seu /seu /seu/work /seu/m2 /seu/cache /seu/mise",
     ],
     user: "root",
     timeoutMs: 60_000,

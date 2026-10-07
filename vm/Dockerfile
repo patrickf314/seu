@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       iproute2 iptables uidmap fuse-overlayfs \
       build-essential python3 python3-venv \
       locales \
- && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen \
+ && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen
 
 # --- docker ---
 RUN install -d -m 0755 /etc/apt/keyrings \
@@ -24,6 +24,7 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Claude Code ---
+ARG CLAUDE_VERSION
 RUN curl -fsSL https://claude.ai/install.sh | bash \
  && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
  && rm -rf /root/.local/bin/claude /root/.local/share/claude \
@@ -71,7 +72,7 @@ RUN mkdir -p /opt/playwright-core \
 # --- the user
 RUN useradd --create-home --shell /bin/bash --uid 1000 seu \
  && usermod -aG docker seu \
- && mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /home/seu/.claude \
+ && mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /seu/mise /home/seu/.claude \
  && ln -s /seu/work  /work \
  && ln -s /seu/m2    /home/seu/.m2 \
  && ln -s /seu/cache /home/seu/.cache \
@@ -79,17 +80,16 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 seu \
  && chown -h seu:seu /work /home/seu/.m2 /home/seu/.cache
 
 # --- the toolchain
-COPY mise.toml /mise/config.toml
-
-RUN mise trust \
- && mise install \
- && mise reshim \
- && chmod -R a+rX /mise
-
+# Only mise itself is in the image (it comes with the base). The project's
+# mise.toml is installed by `seu start` into the TEMPLATE volume -- see
+# src/cmd/start/toolchain.ts -- so every project shares this image, and its
+# tools live under /seu/mise, which is part of the volume every SEU is cloned
+# from.
+#
 # Debian's /etc/profile assigns PATH outright, so a LOGIN shell -- `seu shell`,
 # and every `bash -lc` seu runs -- throws away the ENV PATH set below. profile.d
 # is sourced after that assignment, which is why the toolchain needs both.
-RUN printf 'PATH="/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
+RUN printf 'PATH="/seu/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
 
 COPY dockerd-run.sh session-init.sh /usr/local/bin/
 COPY --chown=seu:seu claude-settings.json /home/seu/.claude/settings.json
@@ -103,9 +103,15 @@ WORKDIR /home/seu
 # the host (`seu build`'s pre-install, every `msb exec`) is not an interactive
 # shell, and without this a plain `mvn` there is "command not found".
 #
+# mise's data and config in the volume rather than the base's /mise: that is
+# what makes the template's install survive into its clones. The cache in ~
+# (also the volume), so it is `seu`'s and not root's.
+#
 # Auto-update would fight the pinned install and needs egress.
-ENV PATH=/mise/shims:$PATH \
-    MISE_CACHE_D/clearIR=/home/seu/.cache/mise \
+ENV PATH=/seu/mise/shims:$PATH \
+    MISE_DATA_DIR=/seu/mise \
+    MISE_CONFIG_DIR=/seu/mise \
+    MISE_CACHE_DIR=/home/seu/.cache/mise \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
