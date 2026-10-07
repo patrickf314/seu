@@ -37,7 +37,9 @@ const ImageReference = z
         'must be a docker image reference, e.g. postgres:18',
     );
 
-/** What `dependency:get` would take for a version if it came third. */
+/**
+ * What `dependency:get` would take for a version if it came third.
+ */
 const PACKAGINGS = new Set(['jar', 'pom', 'war', 'ear', 'maven-plugin', 'test-jar', 'zip', 'aar']);
 
 const MavenCoordinates = z
@@ -46,12 +48,12 @@ const MavenCoordinates = z
         /^[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+){2,4}$/,
         'must be groupId:artifactId:version[:packaging[:classifier]]',
     )
-    // The order Gradle and most docs print -- g:a:packaging:version -- is the
-    // wrong one here, and Maven's own complaint about it comes much later and
-    // much less clearly ("version jar not found").
     .superRefine((c, ctx) => {
         const [g, a, packaging, version, ...rest] = c.split(':');
-        if (!PACKAGINGS.has(packaging ?? '')) return;
+        if (!PACKAGINGS.has(packaging ?? '')) {
+            return;
+        }
+
         const fixed = [g, a, version ?? '<version>', packaging, ...rest].join(':');
         ctx.addIssue({
             code: 'custom',

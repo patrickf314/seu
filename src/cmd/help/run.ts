@@ -1,12 +1,16 @@
-// `seu help` -- renders what the other commands declare about themselves.
+// The `seu help` flow -- renders what the other commands declare about
+// themselves.
 //
 // Nothing about a command is described here: the list comes from the registry,
 // each page comes from that command's own const. The only text this file owns
 // is what is true of seu as a whole.
+//
+// Kept apart from the command const in src/cmd/help/index.ts so that the
+// command set and its renderer do not import each other.
 
-import { COMMANDS, findCommand } from './index.ts';
-import type { Command } from './command.ts';
-import { LOG } from '../common/log.ts';
+import { COMMANDS, findCommand } from '../index.ts';
+import type { Command } from '../command.ts';
+import { LOG } from '../../common/log.ts';
 
 const HEADLINE = 'seu -- Claude Code in a hardware-isolated microVM, with a full build toolchain';
 const PROFILE = 'The project seu configuration has to be placed under .seu/config.json.';
@@ -89,25 +93,19 @@ function usageLine(command: Command): string {
     return `usage: seu ${command.name}${command.args ? ` ${command.args}` : ''}`;
 }
 
-export const HELP: Command = {
-    name: 'help',
-    args: '[command]',
-    summary: 'show this or a command\'s help text',
-
-    async run(argv: string[]): Promise<void> {
-        if (argv.length === 0) {
-            LOG.print(general());
-            return;
-        }
-
-        const command = findCommand(argv[0]);
-        if (command === undefined) {
-            LOG.print(`Unknown command: ${argv[0]}`);
-        } else {
-            LOG.print(page(command));
-        }
+export async function run(argv: string[]): Promise<void> {
+    if (argv.length === 0) {
+        LOG.print(general());
+        return;
     }
-} as const;
+
+    const command = findCommand(argv[0]);
+    if (command === undefined) {
+        LOG.print(`Unknown command: ${argv[0]}`);
+    } else {
+        LOG.print(page(command));
+    }
+}
 
 /**
  * The same text as a refusal: stderr, and the caller picks the exit code.
@@ -116,5 +114,6 @@ export function usage(message?: string): void {
     if (message !== undefined) {
         LOG.error(message);
     }
+
     LOG.print(general());
 }

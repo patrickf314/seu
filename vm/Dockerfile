@@ -11,12 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential python3 python3-venv \
       locales \
  && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen \
- && rm -rf /var/lib/apt/lists/*
 
 # --- docker ---
 RUN install -d -m 0755 /etc/apt/keyrings \
- && curl -fsSL https://download.docker.com/linux/debian/gpg \
-      -o /etc/apt/keyrings/docker.asc \
+ && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && chmod a+r /etc/apt/keyrings/docker.asc \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" \
       > /etc/apt/sources.list.d/docker.list \
@@ -107,6 +105,7 @@ WORKDIR /home/seu
 #
 # Auto-update would fight the pinned install and needs egress.
 ENV PATH=/mise/shims:$PATH \
+    MISE_CACHE_D/clearIR=/home/seu/.cache/mise \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \

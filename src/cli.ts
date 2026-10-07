@@ -5,7 +5,7 @@
 // src/cmd/index.ts. Nothing about a particular command lives here.
 
 import { findCommand } from "./cmd/index.ts";
-import { HELP, usage } from "./cmd/help.ts";
+import { HELP, usage } from "./cmd/help/index.ts";
 import { SeuError } from "./common/error.ts";
 
 const wantsHelp = (argv: string[]): boolean => argv.includes("--help") || argv.includes("-h");
@@ -15,7 +15,7 @@ async function main(): Promise<number> {
 
   // `seu` on its own is a mistake, not a request for help: usage, exit 2.
   if (name === undefined || name === "") {
-    usage();
+    await usage();
     return 2;
   }
 
@@ -26,7 +26,7 @@ async function main(): Promise<number> {
 
   const command = findCommand(name);
   if (!command) {
-    usage(`unknown command ${name}`);
+    await usage(`unknown command ${name}`);
     return 2;
   }
 

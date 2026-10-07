@@ -1,7 +1,7 @@
 // The command set. One entry per command; `cli.ts` dispatches from here and
-// `help.ts` documents from here, so neither can drift from the other.
+// `help/run.ts` documents from here, so neither can drift from the other.
 
-import { HELP } from './help.ts';
+import { HELP } from './help/index.ts';
 import { LIST } from './list/index.ts';
 import { PLAYWRIGHT } from './playwright/index.ts';
 import { PORT } from './port/index.ts';
