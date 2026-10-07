@@ -26,7 +26,10 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Claude Code ---
-RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+ && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
+ && rm -rf /root/.local/bin/claude /root/.local/share/claude \
+ && /usr/local/bin/claude --version
 
 # --- ccstatusline
 ARG CCSTATUSLINE_VERSION=2.2.29

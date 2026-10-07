@@ -29,6 +29,13 @@ import { run, sleep } from '../host.ts';
 import { sdk } from '../microsandbox/microsandboxSdk.ts';
 import { STATE_ROOT, type Instance } from '../config/project.ts';
 
+/**
+ * Forwards are recorded per SEU, in its state dir, and that is all they need
+ * to know about it -- which is what lets `seu list` read them for a SEU it only
+ * knows by sandbox name.
+ */
+type ForwardOwner = Pick<Instance, 'stateDir'>;
+
 /** What the user asked for, once it has been validated. */
 export interface PortSpec {
     /** Host interface to bind. 127.0.0.1 unless asked otherwise. */
@@ -111,13 +118,13 @@ export function parsePort(value: string): number {
 //   <state>/ports/<hostport>.fwd   "<bind> <hostport> <guestport> <pid>"
 //   <state>/ports/<hostport>.log   that tunnel's ssh stderr
 
-const forwardDir = (instance: Instance): string => join(instance.stateDir, 'ports');
+const forwardDir = (instance: ForwardOwner): string => join(instance.stateDir, 'ports');
 
-const recordFile = (instance: Instance, host: number): string => join(forwardDir(instance), `${host}.fwd`);
+const recordFile = (instance: ForwardOwner, host: number): string => join(forwardDir(instance), `${host}.fwd`);
 
-const logFile = (instance: Instance, host: number): string => join(forwardDir(instance), `${host}.log`);
+const logFile = (instance: ForwardOwner, host: number): string => join(forwardDir(instance), `${host}.log`);
 
-function readRecord(instance: Instance, host: number): ActiveForward | undefined {
+function readRecord(instance: ForwardOwner, host: number): ActiveForward | undefined {
     const file = recordFile(instance, host);
     if (!existsSync(file)) return undefined;
 
@@ -140,7 +147,7 @@ function alive(pid: number): boolean {
  * Every forward that is actually up, pruning the records whose ssh has died --
  * which is every one of them after a `seu stop`.
  */
-export function listForwards(instance: Instance): ActiveForward[] {
+export function listForwards(instance: ForwardOwner): ActiveForward[] {
     const dir = forwardDir(instance);
     if (!existsSync(dir)) return [];
 
@@ -159,7 +166,7 @@ export function listForwards(instance: Instance): ActiveForward[] {
     return forwards;
 }
 
-export function forwardUp(instance: Instance, host: number): boolean {
+export function forwardUp(instance: ForwardOwner, host: number): boolean {
     const forward = readRecord(instance, host);
     return forward !== undefined && alive(forward.pid);
 }
@@ -169,7 +176,7 @@ export function forwardUp(instance: Instance, host: number): boolean {
  * cleanly leaves an empty one, and a tunnel that failed never got a record, so
  * its log survives to be read.
  */
-export function stopForward(instance: Instance, host: number): void {
+export function stopForward(instance: ForwardOwner, host: number): void {
     const forward = readRecord(instance, host);
     if (forward !== undefined) {
         try {
@@ -182,7 +189,7 @@ export function stopForward(instance: Instance, host: number): void {
     rmSync(logFile(instance, host), { force: true });
 }
 
-export function stopAllForwards(instance: Instance): void {
+export function stopAllForwards(instance: ForwardOwner): void {
     const dir = forwardDir(instance);
     if (!existsSync(dir)) return;
 
@@ -266,7 +273,7 @@ const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
  * Bring one forward up. Returns false for a forward that did not come up,
  * having said why -- the caller decides whether that fails the command.
  */
-export async function startForward(instance: Instance, tunnels: Tunnels, spec: PortSpec): Promise<boolean> {
+export async function startForward(instance: ForwardOwner, tunnels: Tunnels, spec: PortSpec): Promise<boolean> {
     const { bind, host, guest } = spec;
     const label = `${bind}:${host} -> vm:${guest}`;
 
@@ -320,7 +327,7 @@ export async function startForward(instance: Instance, tunnels: Tunnels, spec: P
  * resolver try both families, which also reaches 127.0.0.1-only listeners (the
  * trace viewer) and 0.0.0.0 ones (docker-proxy).
  */
-function spawnTunnel(instance: Instance, tunnels: Tunnels, spec: PortSpec): number | undefined {
+function spawnTunnel(instance: ForwardOwner, tunnels: Tunnels, spec: PortSpec): number | undefined {
     const log = logFile(instance, spec.host);
     mkdirSync(forwardDir(instance), { recursive: true });
     writeFileSync(log, '');
@@ -344,7 +351,7 @@ function spawnTunnel(instance: Instance, tunnels: Tunnels, spec: PortSpec): numb
     }
 }
 
-function failed(instance: Instance, message: string, host: number): boolean {
+function failed(instance: ForwardOwner, message: string, host: number): boolean {
     LOG.warn(message);
     const log = logFile(instance, host);
     if (existsSync(log)) {
@@ -359,7 +366,7 @@ function failed(instance: Instance, message: string, host: number): boolean {
  * A real connection attempt rather than a parse of `netstat`: it is the only
  * answer that means what the guard above needs it to mean.
  */
-function hostPortListening(bind: string, port: number): Promise<boolean> {
+export function hostPortListening(bind: string, port: number): Promise<boolean> {
     const host = bind === '0.0.0.0' ? '127.0.0.1' : bind;
     return new Promise((resolve) => {
         const socket = createConnection({ host, port });

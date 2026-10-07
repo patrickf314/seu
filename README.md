@@ -67,7 +67,26 @@ port forwards. Only the base image is shared.
 The sandbox is `seu-<name>-<hash of the worktree path>` and the volume
 `seu-<name>-<hash>-data`, so the default SEU keeps the names it always had.
 
-`stop`, `status`, `clean`, `doctor` and `playwright` still exist only
+`seu list` shows every SEU on the machine — name, status, image, port forwards
+and worktree, with a `*` on the ones of the worktree you are in (`--here` shows
+only those). It reads the sandboxes themselves, so there is no registry to go
+stale.
+
+```bash
+./seu/bin/seu stop [name]           # stop the session; the volume keeps everything
+./seu/bin/seu remove [name]         # delete the SEU: sandboxes, volume, state
+```
+
+`stop` drops the SEU's port forwards too; `seu start` or `seu shell` resumes it
+as it was. `remove` is for good: the volume — `/work`, `~/.m2`, Docker images —
+goes with it. It first checks a running session for uncommitted changes and for
+branches whose commits the host does not have (never `seu pull`ed), refuses if
+there are any unless `--force`, and then asks you to type the name (`--yes`
+skips that). `--keep-volume` removes only the sandboxes. The `seu pull` bundle
+and its git remote are kept, since fetched-but-unmerged commits may live only
+there.
+
+`status`, `clean` and `doctor` still exist only
 as `lib/cmd-*.sh` and have no entry point since `bin/seu` stopped dispatching to
 bash — see [Two halves](#two-halves-typescript-and-bash). `shell` resumes a
 stopped session itself.
@@ -112,6 +131,7 @@ Every key is optional, and so is the file:
 | `image.mise-toml` | `./mise.toml` | the toolchain baked into the image, installed into `/mise`. A project without one gets no managed JDK/Maven. |
 | `image.pre-install` | nothing | what `seu start` fetches into the named volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
 | `install.script` | nothing | what `seu start` runs in `/work` to make the checkout buildable. See below. |
+| `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright trace` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
 [zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches
@@ -211,9 +231,10 @@ from `dist/cli.js` and from a split chunk.
 
 `bin/seu` is a launcher: it execs `src/cli.ts`, and every command is a
 `Command` const in `src/cmd/` carrying its own documentation and its own `run`.
-`start`, `shell`, `pull` and `port` are ported and talk to microsandbox
-through the **npm SDK** (`microsandbox`); `start` replaces the bash `build`, `up`
-and `start`. What is left in `lib/` — `stop`, `status`, `clean`, `doctor`, `playwright` and the Claude config sync —
+`start`, `stop`, `remove`, `list`, `shell`, `pull`, `port` and `playwright` are
+ported and talk to microsandbox through the **npm SDK** (`microsandbox`); `start`
+replaces the bash `build`, `up` and `start`, `remove` the bash `clean`. What is
+left in `lib/` — `status`, `clean`, `doctor` and the Claude config sync —
 is not reachable from `bin/seu` at all any more; sourcing `lib/cmd-<name>.sh`
 by hand is the only way to run it. Porting one means adding its `Command`; the
 registry, the dispatcher and `seu help` do not change.
@@ -410,17 +431,25 @@ seu playwright trace club/club-ui/club-ui-test/target/trace.zip
 
 The path is relative to `/work` (a leading `/work/` is accepted). This starts
 Playwright's own trace viewer **inside the VM**, forwards its port out with the
-machinery behind `seu port`, and opens it in your browser. Ctrl-C stops the
-viewer and drops the forward.
+machinery behind `seu port`, and opens it in your browser (`--no-open` only
+prints the URL). Ctrl-C stops the viewer and drops the forward. `--name` picks
+the SEU, `--port` the host port (default: the first free one from 9323).
+While it runs the forward shows up in `seu port` and `seu list` like any other.
 
 The trace never leaves the sandbox — only an HTTP port does. Your Mac needs no
 node, no `npx` and no network, which also means there is no copy of the trace
 sitting around on the host afterwards.
 
-It uses the same `playwright_pom` as the browser download, because the viewer
-ships inside the Playwright jar and that module's pom is what puts it on the
-classpath. A project without the key gets a clear error rather than a confusing
-Maven failure.
+The viewer ships inside the Playwright jar, so it is started with
+`mvn -o exec:java` through the module whose pom puts that jar on the classpath:
+
+```json
+{ "playwright": { "pom": "club/club-ui/club-ui-test/pom.xml" } }
+```
+
+`--pom` overrides it. A project without either gets a clear error rather than a
+confusing Maven failure. It runs offline, so the exec plugin and Playwright must
+already be in `~/.m2` — an `install.script` that builds the module sees to that.
 
 Two details worth knowing, both verified against the driver bundle rather than
 assumed:

@@ -351,6 +351,36 @@ export async function stopSandbox(name: string): Promise<void> {
   }
 }
 
+/**
+ * Stop a sandbox if it is running, then remove it -- root disk and all. The
+ * named volume it mounted is not touched; that is a separate decision.
+ */
+export async function removeSandbox(name: string): Promise<void> {
+  const status = await sandboxStatus(name);
+  if (status === "absent") return;
+  if (status !== "stopped" && status !== "crashed" && status !== "created") await stopSandbox(name);
+
+  const { Sandbox } = await sdk();
+  try {
+    await Sandbox.remove(name);
+  } catch (err) {
+    die(`could not remove ${name}: ${(err as Error).message}`);
+  }
+}
+
+/** Remove the instance's named volume. False when there was none. */
+export async function removeVolume(instance: Instance): Promise<boolean> {
+  const name = volumeName(instance.slug);
+  const { Volume } = await sdk();
+  if (!(await Volume.list()).some((v) => v.name === name)) return false;
+  try {
+    await Volume.remove(name);
+  } catch (err) {
+    die(`could not remove ${name}: ${(err as Error).message}`);
+  }
+  return true;
+}
+
 /** Destroy a sandbox, gracefully if it will and forcibly if it will not. */
 export async function destroySandbox(sandbox: Sandbox): Promise<void> {
   try {

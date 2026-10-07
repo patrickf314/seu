@@ -9,7 +9,7 @@ import type { Sandbox, SandboxStatus } from 'microsandbox';
 import { sdk } from './microsandbox/microsandboxSdk.ts';
 import { LOG } from './common/log.ts';
 import { die } from './common/error.ts';
-import type { Instance } from './config/project.ts';
+import { type Instance, seuCommand } from './config/project.ts';
 import { bootstrapVolume, sandboxStatus, sessionSandboxName, startSandbox, waitForAgent } from './sandbox.ts';
 
 export interface Session {
@@ -41,7 +41,7 @@ export async function requireSession(instance: Instance): Promise<Session> {
     const status = await sessionStatus(instance);
 
     if (status === 'absent') {
-        die(`${name} does not exist -- run \`seu start ${instance.name}\` first`);
+        die(`${name} does not exist -- run \`${seuCommand(instance, 'start')}\` first`);
     }
 
     if (status === 'running') {

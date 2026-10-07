@@ -112,6 +112,19 @@ const SeuConfigSchema = z
             })
             .strict()
             .optional(),
+
+        playwright: z
+            .object({
+                /**
+                 * The module whose pom puts the Playwright Java client on the
+                 * classpath. `seu playwright` runs Playwright's own CLI through
+                 * it, because the CLI -- trace viewer included -- ships inside
+                 * that jar and nowhere else in the VM.
+                 */
+                pom: ProjectPath.optional(),
+            })
+            .strict()
+            .optional(),
     })
     .strict();
 
@@ -148,6 +161,14 @@ export interface SeuConfig {
          */
         readonly script: string | undefined;
     };
+
+    readonly playwright: {
+        /**
+         * Relative to the worktree, without a leading `./`; undefined when the
+         * project names none.
+         */
+        readonly pom: string | undefined;
+    };
 }
 
 /**
@@ -171,6 +192,9 @@ export function loadConfig(project: Project): SeuConfig {
         },
         install: {
             script: config.install?.script?.trim() || undefined,
+        },
+        playwright: {
+            pom: config.playwright?.pom?.replace(/^\.\//, ''),
         },
     };
 }

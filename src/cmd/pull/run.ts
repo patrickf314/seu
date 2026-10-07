@@ -3,6 +3,7 @@
 // Kept apart from the command const in src/cmd/pull.ts so that loading the
 // command set does not load the microsandbox SDK.
 
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
@@ -25,6 +26,7 @@ export async function run(argv: string[]): Promise<void> {
     const instance = resolveInstance(project, name);
     const session = await requireSession(instance);
     const bundle = join(instance.stateDir, `${instance.slug}.bundle`);
+    mkdirSync(instance.stateDir, { recursive: true });
 
     LOG.step(`Bundling ${WORK_DIR}`);
     const bundled = await exec(session.sandbox, {

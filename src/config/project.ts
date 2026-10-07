@@ -2,7 +2,7 @@
 // derived from it called. Port of seu_resolve_project in lib/common.sh.
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { CONFIG_FILE } from './config.ts';
 import { run } from '../host.ts';
@@ -115,10 +115,17 @@ export function resolveInstance(project: Project, name: string = defaultInstance
     }
 
     const slug = `${name}-${project.hash}`;
-    const stateDir = join(STATE_ROOT, slug);
-    mkdirSync(stateDir, { recursive: true });
+    // Not created here: naming a SEU that does not exist must not leave a
+    // directory behind. Whatever writes into it creates it.
+    return { project, name, slug, stateDir: join(STATE_ROOT, slug) };
+}
 
-    return { project, name, slug, stateDir };
+/**
+ * `seu <command>` as the user would type it for this instance: the name only
+ * when it is not the default, which needs none.
+ */
+export function seuCommand(instance: Instance, command: string): string {
+    return instance.name === defaultInstanceName(instance.project) ? `seu ${command}` : `seu ${command} ${instance.name}`;
 }
 
 /** The directory name, with anything a sandbox name cannot hold replaced. */

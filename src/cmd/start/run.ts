@@ -22,7 +22,7 @@ import { runPreInstall } from './pre-install.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { buildNetworkPolicy, sessionNetworkPolicy } from '../../network/net.ts';
-import { type Instance, resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
+import { type Instance, resolveInstance, resolveProject, seuCommand, takeInstanceName } from '../../config/project.ts';
 import { declareHostRepository, hostRepository, sealForOffline } from '../../maven/hostRepository.ts';
 import {
     bootstrapVolume,
@@ -184,7 +184,7 @@ async function resume(instance: Instance, name: string, status: SandboxStatus): 
     if (status === 'running') {
         LOG.step('Session sandbox');
         LOG.ok(`${name} is already running (pass --reinstall to install again)`);
-        LOG.info(`\`${shellCommand(instance)}\` to get in`);
+        LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in`);
         return;
     }
 
@@ -349,15 +349,10 @@ async function startSession(tag: string, instance: Instance, name: string): Prom
     ready(instance, name);
 }
 
-/** Only names the SEU when it is not the default, which needs no name. */
-function shellCommand(instance: Instance): string {
-    return instance.name === resolveInstance(instance.project).name ? 'seu shell' : `seu shell ${instance.name}`;
-}
-
 function ready(instance: Instance, name: string): void {
     LOG.step('Up');
     LOG.ok(`${name} is running with the session network policy`);
-    LOG.info(`\`${shellCommand(instance)}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
+    LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
     // dockerd lives in the foreground of a host-side exec (see
     // vm/dockerd-run.sh), and that exec dies with the process that opened it.
     // `start` has to return, so it cannot be the one supervising it.

@@ -3,7 +3,7 @@
 // base-image step of lib/cmd-build.sh.
 
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInherit, runOk } from '../../host.ts';
@@ -80,6 +80,7 @@ export async function buildBaseImage(
         }
         LOG.ok(`Base image built: ${tag}`);
 
+        mkdirSync(stateDir, { recursive: true });
         const tar = join(stateDir, 'base-image.tar');
         try {
             await runOk('docker', ['save', '-o', tar, tag], 'docker save failed');

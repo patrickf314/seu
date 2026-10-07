@@ -2,10 +2,14 @@
 // `help.ts` documents from here, so neither can drift from the other.
 
 import { HELP } from './help.ts';
+import { LIST } from './list.ts';
+import { PLAYWRIGHT } from './playwright.ts';
 import { PORT } from './port.ts';
 import { PULL } from './pull.ts';
+import { REMOVE } from './remove.ts';
 import { SHELL } from './shell.ts';
 import { START } from './start.ts';
+import { STOP } from './stop.ts';
 import type { Command } from './command.ts';
 
 /**
@@ -13,9 +17,13 @@ import type { Command } from './command.ts';
  */
 export const COMMANDS: readonly Command[] = [
     START,
+    STOP,
+    REMOVE,
+    LIST,
     SHELL,
     PULL,
     PORT,
+    PLAYWRIGHT,
     HELP,
 ];
 
