@@ -17,7 +17,7 @@
 // checkout with no node_modules, and this module is only imported once a start
 // actually happens.
 
-import type { SandboxStatus } from 'microsandbox';
+import type { Sandbox, SandboxStatus } from 'microsandbox';
 import { CONFIG_FILE, loadConfig, type SeuConfig } from '../../config/config.ts';
 import { requireImage } from '../../msb/image.ts';
 import { buildTemplate, findTemplate, type Template } from '../../msb/template.ts';
@@ -52,51 +52,70 @@ interface StartOptions {
 export async function run(argv: string[]): Promise<number> {
     const opts = parseStartArgs(argv);
 
-    LOG.step('Metadata')
+    LOG.step('Metadata');
     const project = await resolveProject();
     const config = loadConfig(project);
     const instance = resolveInstance(project, opts.name);
-    const name = sessionSandboxName(instance);
     logMetadata(project, instance);
 
-    const status = await sessionStatus(instance);
-    if (!opts.reinstall && status !== 'absent') {
-        return enter(config, instance, await resume(config, instance, status), opts);
-    }
-
-    // Before anything is rebuilt: a reinstall replaces this SEU's volume, and
-    // the check is cheapest to fail early.
-    if (opts.reinstall && status !== 'absent') {
-        LOG.step(`Checking ${WORK_DIR} of ${name}`);
-        const session = await resumeSession(instance);
-        await guardUnsavedWork(instance, session.sandbox, opts.force, 'reinstall');
-    }
-
-    LOG.step('Image');
-    await requireImage(config.image);
-    LOG.ok(config.image);
-
+    const name = sessionSandboxName(instance);
     const volume = volumeName(instance.name);
-    if (!opts.reinstall && (await volumeExists(volume))) {
+    const status = await sessionStatus(instance);
+    let session: Session;
+
+    if (!opts.reinstall && status !== 'absent') {
+        LOG.step(`Resuming ${name}`);
+        session = await resume(config, instance, status);
+    } else {
+        // Before anything is rebuilt: a reinstall replaces this SEU's volume,
+        // and the check is cheapest to fail early.
+        if (opts.reinstall && status !== 'absent') {
+            LOG.step(`Checking ${WORK_DIR} of ${name}`);
+            await checkUnsavedWork(instance, opts.force);
+        }
+
+        LOG.step('Image');
+        await requireImage(config.image);
+        LOG.ok(config.image);
+
         // A SEU whose session was removed but whose volume was kept
         // (`seu remove --keep-volume`): everything is still in there.
-        LOG.step('Volume');
-        LOG.ok(`reusing ${volume}`);
-        return enter(config, instance, await startSession(config, instance, false), opts);
+        const fromTemplate = opts.reinstall || !(await volumeExists(volume));
+        if (fromTemplate) {
+            LOG.step('Template');
+            const template = await ensureTemplate(project, config, opts);
+
+            // Only now, with the new template in hand: a reinstall that fails
+            // on the way leaves the SEU as it was.
+            if (opts.reinstall && (await seuExists(instance))) {
+                LOG.step(`Discarding the current ${name}`);
+                await discardSeu(instance);
+            }
+
+            LOG.step(`Cloning ${template.volume}`);
+            await cloneTemplate(template, volume);
+        } else {
+            LOG.step('Volume');
+            LOG.ok(`reusing ${volume}`);
+        }
+
+        LOG.step(`Creating ${name} (egress: Anthropic only)`);
+        const sandbox = await createSession(config, instance);
+
+        LOG.step(`Preparing ${WORK_DIR}`);
+        await prepareSession(config, sandbox, fromTemplate);
+        session = { name, sandbox, resumed: false };
     }
 
-    const template = await ensureTemplate(project, config, opts);
+    // No shell when asked not to -- or when there is no terminal to hand over:
+    // the session is up, and the way in is printed instead.
+    if (opts.detach || !process.stdin.isTTY) {
+        LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
+        return 0;
+    }
 
-    // Only now, with the new template in hand: a reinstall that fails on the
-    // way leaves the SEU as it was.
-    if (opts.reinstall) await discardSeu(instance);
-
-    LOG.step(`Cloning ${template.volume}`);
-    const started = Date.now();
-    await cloneVolume(template.volume, volume);
-    LOG.ok(`${volume} (${Date.now() - started} ms)`);
-
-    return enter(config, instance, await startSession(config, instance, true), opts);
+    LOG.step(`Attach with ${name}`);
+    return shell(config, session);
 }
 
 function parseStartArgs(argv: string[]): StartOptions & InstanceOptions {
@@ -127,11 +146,19 @@ function logMetadata(project: Project, instance: Instance): void {
 }
 
 /**
+ * Refuses unless ~/work of the existing session holds nothing the host does not
+ * have, or --force says to discard it.
+ */
+async function checkUnsavedWork(instance: Instance, force: boolean): Promise<void> {
+    const session = await resumeSession(instance);
+    await guardUnsavedWork(instance, session.sandbox, force, 'reinstall');
+}
+
+/**
  * The project's template: the existing one while it still matches the config,
  * otherwise -- or always on --reinstall -- a freshly built one.
  */
 async function ensureTemplate(project: Project, config: SeuConfig, opts: StartOptions): Promise<Template> {
-    LOG.step('Template');
     const existing = await findTemplate(project, config);
 
     if (existing === undefined) {
@@ -148,18 +175,28 @@ async function ensureTemplate(project: Project, config: SeuConfig, opts: StartOp
     return buildTemplate(project, config, { hostM2: opts.hostM2 });
 }
 
+/** Whether there is anything of this SEU left: its session or its volume. */
+async function seuExists(instance: Instance): Promise<boolean> {
+    return (await sessionStatus(instance)) !== 'absent' || (await volumeExists(volumeName(instance.name)));
+}
+
 /** This SEU's session, any leftover install sandbox, its forwards and its volume. */
 async function discardSeu(instance: Instance): Promise<void> {
     const session = sessionSandboxName(instance);
     const volume = volumeName(instance.name);
-    if ((await sessionStatus(instance)) === 'absent' && !(await volumeExists(volume))) return;
 
-    LOG.step(`Discarding the current ${session}`);
     await removeSandbox(installSandboxName(instance));
     await clearSession(instance);
     stopAllForwards(instance);
     await removeVolume(volume);
     LOG.ok(`removed ${session} and ${volume}`);
+}
+
+/** The SEU's volume as a clone of the template's. */
+async function cloneTemplate(template: Template, volume: string): Promise<void> {
+    const started = Date.now();
+    await cloneVolume(template.volume, volume);
+    LOG.ok(`${volume} (${Date.now() - started} ms)`);
 }
 
 /**
@@ -171,7 +208,6 @@ async function discardSeu(instance: Instance): Promise<void> {
  */
 async function resume(config: SeuConfig, instance: Instance, status: SandboxStatus): Promise<Session> {
     if (status === 'running') {
-        LOG.step('Session sandbox');
         LOG.ok(`${sessionSandboxName(instance)} is already running (pass --reinstall to install again)`);
     }
 
@@ -182,16 +218,12 @@ async function resume(config: SeuConfig, instance: Instance, status: SandboxStat
 }
 
 /**
- * The session itself: the SEU's volume, the image, the narrowed policy, and a
- * lifetime of its own -- it is detached, so it stays up when this command
+ * The session sandbox itself: the SEU's volume, the image, the narrowed policy,
+ * and a lifetime of its own -- it is detached, so it stays up when this command
  * returns.
- *
- * `fromTemplate`: the volume is a fresh clone, whose ~/work still sits on the
- * worktree and commit the template was installed from.
  */
-async function startSession(config: SeuConfig, instance: Instance, fromTemplate: boolean): Promise<Session> {
+async function createSession(config: SeuConfig, instance: Instance): Promise<Sandbox> {
     const name = sessionSandboxName(instance);
-    LOG.step(`Creating ${name} (egress: Anthropic only)`);
     const sandbox = await createSandbox({
         name,
         image: config.image,
@@ -202,26 +234,18 @@ async function startSession(config: SeuConfig, instance: Instance, fromTemplate:
     });
 
     await sandboxReady(sandbox);
-
-    LOG.step(`Preparing ${WORK_DIR}`);
-    await prepareWork(sandbox);
-    if (fromTemplate) await syncWorkToSource(sandbox);
-    await installClaudeSettings(sandbox, config);
-
     LOG.ok(`${name} is running with the session network policy`);
-    return { name, sandbox, resumed: false };
+    return sandbox;
 }
 
 /**
- * Into the shell, unless asked not to -- or unless there is no terminal to hand
- * over, in which case the session is up and the way in is printed instead.
+ * ~/work and the Claude settings of a new session.
+ *
+ * `fromTemplate`: the volume is a fresh clone, whose ~/work still sits on the
+ * worktree and commit the template was installed from.
  */
-async function enter(config: SeuConfig, instance: Instance, session: Session, opts: StartOptions): Promise<number> {
-    if (opts.detach || !process.stdin.isTTY) {
-        LOG.info(`\`${seuCommand(instance, 'shell')}\` to get in; ${WORK_DIR} is your writable clone -- run \`claude\` there`);
-        return 0;
-    }
-
-    LOG.step(`Attach with ${session.name}`);
-    return shell(config, session);
+async function prepareSession(config: SeuConfig, sandbox: Sandbox, fromTemplate: boolean): Promise<void> {
+    await prepareWork(sandbox);
+    if (fromTemplate) await syncWorkToSource(sandbox);
+    await installClaudeSettings(sandbox, config);
 }
