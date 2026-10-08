@@ -347,8 +347,8 @@ The session must have almost no network. The warm-up needs a lot of it. And
 **a sandbox's network policy cannot be changed after creation** — so one
 sandbox cannot be both.
 
-`seu start` therefore creates a *throwaway* install sandbox with wide egress (the
-allowlist in `src/network/net.ts`; `config/net-build.yaml` is the bash half's copy),
+`seu start` therefore creates a *throwaway* install sandbox with open egress
+(`buildNetworkPolicy` in `src/network/net.ts`; `config/net-build.yaml` is the bash half's copy),
 fills four **named volumes**, and destroys it. The
 session sandbox is then created with the locked-down profile
 (`config/net-session.yaml`) and mounts those same volumes.
@@ -699,7 +699,9 @@ guest is untouched** — the Docker bridge, published container ports on
 `localhost`, container-to-container DNS, Testcontainers. That is why the test-env
 works under a deny-all policy.
 
-`config/net-build.yaml` is the wider profile used only by the install sandbox of `seu start`. It is
+`config/net-build.yaml` is the open profile used only by the install sandbox of `seu start`. It
+allows all egress, because what the build needs depends on the project (the
+tools in its `mise.toml`, its Maven repositories, its images). It is
 deliberately **not** `strict` and has TLS interception **off**: interception
 would require importing microsandbox's CA into the JDK truststore, because the
 JVM ignores the OS trust store and Maven would fail every HTTPS fetch.
@@ -869,10 +871,9 @@ Hard-won, verified on microsandbox 0.7.2 / macOS 26.7 / arm64:
   between `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`, so
   allowing only the first makes every other attempt die with `ENOTFOUND
   playwright.download.prss.microsoft.com`. (`*.azureedge.net` is the retired CDN,
-  kept for older versions.) Verified by resolving both inside a sandbox created
-  with `net-build.yaml` — which is also the quickest way to test any allowlist
-  change: `msb create -n t --net-conf config/net-build.yaml alpine`, then
-  `getent hosts <name>`. A blocked host returns NXDOMAIN.
+  kept for older versions.) This only matters for an allowlist; the build
+  phase is open now. To test one: `msb create -n t --net-conf <policy>.yaml
+  alpine`, then `getent hosts <name>`. A blocked host returns NXDOMAIN.
 - Pin the Claude Code version for reproducible images:
   `CLAUDE_CODE_VERSION=2.1.267 ./seu/bin/seu start --reinstall`.
 - **A `file://` local repository is a valid Maven *remote* for releases only.**
@@ -976,8 +977,8 @@ vm/Dockerfile               seu-vm-image (FROM jdxcode/mise:debian), shared by a
    session-init.sh          clone /src -> /work
    warm.sh                  the whole `seu build` warm-up
 config/net-session.yaml     Anthropic-only egress
-       net-build.yaml       wide egress, build phase only (bash half; the
-                            TypeScript build uses src/net.ts)
+       net-build.yaml       open egress, build phase only (bash half; the
+                            TypeScript build uses src/network/net.ts)
        resources.yaml       cpus / memory / idle timeout
 examples/                   a real .seu/config.json to copy into a project
 .seu-state/                 git bundles, dockerd pidfiles, staged host images,
