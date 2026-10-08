@@ -6,7 +6,7 @@ import { LOG } from './log.ts';
 import { die } from './error.ts';
 import { execOnHost } from '../host/exec.ts';
 import type { Instance } from '../config/project.ts';
-import { SRC_MOUNT, WORK_DIR } from '../msb/sandbox.ts';
+import { SRC_MOUNT, WORK_DIR } from './constants.ts';
 import { execInSandbox } from '../msb/exec.ts';
 
 export interface UnsavedWork {

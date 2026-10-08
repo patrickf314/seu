@@ -20,7 +20,7 @@ import type { Sandbox } from 'microsandbox';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { HOST_REPOSITORY_MOUNT } from '../msb/sandbox.ts';
+import { HOST_REPOSITORY_MOUNT } from '../common/constants.ts';
 import { LOG } from '../common/log.ts';
 import { SEU_ROOT } from '../config/project.ts';
 import { execInSandbox } from '../msb/exec.ts';

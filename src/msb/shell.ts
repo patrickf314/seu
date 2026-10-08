@@ -1,7 +1,7 @@
 import type { SeuConfig } from '../config/config.ts';
 import type { Session } from './session.ts';
 import { resolveSecrets } from '../config/secrets.ts';
-import { WORK_DIR } from './sandbox.ts';
+import { WORK_DIR } from '../common/constants.ts';
 
 /**
  * Give the session a Docker daemon and the profile's secrets, and hand the

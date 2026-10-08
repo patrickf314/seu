@@ -17,7 +17,7 @@ import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { execOnHost } from '../../host/exec.ts';
 import { resolveInstance, resolveProject } from '../../config/project.ts';
 import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
-import { WORK_DIR } from '../../msb/sandbox.ts';
+import { WORK_DIR } from '../../common/constants.ts';
 import {
     hostPortListening,
     parsePort,

@@ -16,10 +16,8 @@ import {
     destroySandbox,
     prepareWork,
     removeSandbox,
-    SRC_MOUNT,
-    VOLUME_MOUNT,
-    WORK_DIR,
 } from './sandbox.ts';
+import { SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 import { execInSandbox } from './exec.ts';
 import { sdk } from './sdk.ts';
 import { createVolume, removeVolume, volumeLabels } from './volume.ts';

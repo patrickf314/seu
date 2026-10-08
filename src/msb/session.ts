@@ -1,4 +1,4 @@
-import type { Sandbox, SandboxStatus } from 'microsandbox';
+import type { Sandbox, SandboxHandle, SandboxStatus } from 'microsandbox';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
 import type { SeuConfig } from '../config/config.ts';
@@ -7,17 +7,20 @@ import { sessionNetworkPolicy } from '../network/net.ts';
 import {
     connectToSandbox,
     createSandbox,
-    installSandboxName,
+    listSandboxes,
     prepareWork,
     removeSandbox,
     sandboxReady,
     sandboxStatus,
     startSandbox,
+    stopSandbox,
 } from './sandbox.ts';
 import type { Template } from './template.ts';
-import { cloneVolume, removeVolume, volumeExists, volumeName } from './volume.ts';
+import { SRC_MOUNT } from '../common/constants.ts';
+import { cloneVolume, removeVolume, volumeExists } from './volume.ts';
 
 const SESSION_SANDBOX_PREFIX = 'seu-session-';
+const INSTALL_SANDBOX_PREFIX = 'seu-install-';
 
 export interface Session {
     /**
@@ -44,6 +47,21 @@ export function sessionSandboxName(instance: Instance): string {
 }
 
 /**
+ * The install sandbox an older `seu start` used per SEU. Installs now only
+ * ever happen into a template, but one of these can still be left over.
+ */
+export function installSandboxName(instance: Instance): string {
+    return `${INSTALL_SANDBOX_PREFIX}${instance.name}`;
+}
+
+/**
+ * The named volume of one SEU instance: ~/work, ~/.m2, ~/.cache, Docker images.
+ */
+export function sessionVolumeName(instance: Instance): string {
+    return `seu-${instance.name}-data`;
+}
+
+/**
  * The instance name a session sandbox belongs to, or undefined when the
  * sandbox is not a session.
  */
@@ -53,6 +71,10 @@ export function sessionInstanceName(sandboxName: string): string | undefined {
 
 export async function sessionStatus(instance: Instance): Promise<SandboxStatus | 'absent'> {
     return sandboxStatus(sessionSandboxName(instance));
+}
+
+export async function installSandboxStatus(instance: Instance): Promise<SandboxStatus | 'absent'> {
+    return sandboxStatus(installSandboxName(instance));
 }
 
 /**
@@ -75,12 +97,27 @@ export async function resumeSession(instance: Instance): Promise<Session> {
     return { name, sandbox: await startSandbox(name), resumed: true };
 }
 
+export async function stopSession(instance: Instance): Promise<void> {
+    await stopSandbox(sessionSandboxName(instance));
+}
+
 export async function clearSession(instance: Instance): Promise<void> {
     await removeSandbox(sessionSandboxName(instance));
 }
 
+export async function removeInstallSandbox(instance: Instance): Promise<void> {
+    await removeSandbox(installSandboxName(instance));
+}
+
+/**
+ * Remove the SEU's volume. False when there was none.
+ */
+export async function removeSessionVolume(instance: Instance): Promise<boolean> {
+    return removeVolume(sessionVolumeName(instance));
+}
+
 export async function sessionVolumeExists(instance: Instance): Promise<boolean> {
-    return volumeExists(volumeName(instance.name));
+    return volumeExists(sessionVolumeName(instance));
 }
 
 /**
@@ -94,7 +131,7 @@ export async function sessionExists(instance: Instance): Promise<boolean> {
  * The SEU's volume as a clone of the template's.
  */
 export async function cloneSessionVolume(instance: Instance, template: Template): Promise<void> {
-    const volume = volumeName(instance.name);
+    const volume = sessionVolumeName(instance);
     const started = Date.now();
     await cloneVolume(template.volume, volume);
     LOG.ok(`${volume} (${Date.now() - started} ms)`);
@@ -111,7 +148,7 @@ export async function createSession(instance: Instance, config: SeuConfig): Prom
         name,
         image: config.image,
         project: instance.project,
-        volume: volumeName(instance.name),
+        volume: sessionVolumeName(instance),
         network: { policy: await sessionNetworkPolicy(), strict: true },
         detached: true,
     });
@@ -132,11 +169,79 @@ export async function prepareSessionWork(session: Session): Promise<void> {
  * The SEU's session, any leftover install sandbox and its volume.
  */
 export async function discardSession(instance: Instance): Promise<void> {
-    const session = sessionSandboxName(instance);
-    const volume = volumeName(instance.name);
-
-    await removeSandbox(installSandboxName(instance));
+    await removeInstallSandbox(instance);
     await clearSession(instance);
-    await removeVolume(volume);
-    LOG.ok(`removed ${session} and ${volume}`);
+    await removeSessionVolume(instance);
+    LOG.ok(`removed ${sessionSandboxName(instance)} and ${sessionVolumeName(instance)}`);
+}
+
+/**
+ * A SEU's sandbox as read back from microsandbox: its session, or a leftover
+ * install sandbox.
+ */
+export interface SessionListing {
+    readonly instanceName: string;
+
+    /**
+     * True for a leftover install sandbox rather than the session.
+     */
+    readonly installing: boolean;
+
+    readonly status: SandboxStatus;
+
+    /**
+     * The image it runs, from its stored config.
+     */
+    readonly image: string | undefined;
+
+    /**
+     * The worktree it mounts at /src.
+     */
+    readonly worktree: string;
+}
+
+/** The slice of a sandbox's stored config a listing reads. */
+interface StoredConfig {
+    image?: { Oci?: { reference?: string } };
+    mounts?: { type?: string; host?: string; guest?: string }[];
+}
+
+/**
+ * Every SEU's sandbox on this machine. There is no registry of SEUs to go
+ * stale: the name says which SEU a sandbox is, its stored config which
+ * worktree it mounts and which image it runs.
+ */
+export async function listSessions(): Promise<SessionListing[]> {
+    return (await listSandboxes())
+        .map(toListing)
+        .filter((listing): listing is SessionListing => listing !== undefined);
+}
+
+function toListing(sandbox: SandboxHandle): SessionListing | undefined {
+    const session = sessionInstanceName(sandbox.name);
+    const install = sandbox.name.startsWith(INSTALL_SANDBOX_PREFIX)
+        ? sandbox.name.slice(INSTALL_SANDBOX_PREFIX.length)
+        : undefined;
+    // Template install sandboxes and anything else that is not a SEU.
+    const instanceName = session ?? install;
+    if (instanceName === undefined) return undefined;
+
+    let config: StoredConfig = {};
+    try {
+        config = JSON.parse(sandbox.configJson) as StoredConfig;
+    } catch {
+        // A sandbox whose config cannot be read is still worth a line.
+    }
+
+    const worktree = config.mounts?.find((m) => m.type === 'Bind' && m.guest === SRC_MOUNT)?.host;
+    // Anything named like a SEU but not mounting a worktree at /src is not one.
+    if (worktree === undefined) return undefined;
+
+    return {
+        instanceName,
+        installing: install !== undefined,
+        status: sandbox.status,
+        image: config.image?.Oci?.reference,
+        worktree,
+    };
 }

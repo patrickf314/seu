@@ -7,9 +7,10 @@ import { sdk } from './sdk.ts';
 import { sleep } from '../common/utils.ts';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
-import type { Instance, Project } from '../config/project.ts';
+import type { Project } from '../config/project.ts';
 import { execInSandbox } from './exec.ts';
 import { VOLUME_SIZE_MIB } from './volume.ts';
+import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 
 type NetworkBuilder = InstanceType<typeof import('microsandbox').NetworkBuilder>;
 type TlsBuilder = InstanceType<typeof import('microsandbox').TlsBuilder>;
@@ -20,29 +21,6 @@ export const RESOURCES = {
     rootDiskMiB: 20 * 1024,
     idleTimeoutSecs: 60 * 60,
 };
-
-const HOME_DIR = '/home/seu';
-
-export const VOLUME_MOUNT = HOME_DIR;
-
-/**
- * The worktree, mounted read-only. Nothing in here is ever written to.
- */
-export const SRC_MOUNT = '/src';
-
-/** The writable clone of /src, living in the named volume. */
-export const WORK_DIR = HOME_DIR + '/work';
-
-/**
- * The host's own Maven repository, read-only. Install sandbox only.
- */
-export const HOST_REPOSITORY_MOUNT = '/host-m2';
-
-/**
- * The install sandbox an older `seu start` used per SEU. Installs now only
- * ever happen into a template, but one of these can still be left over.
- */
-export const installSandboxName = (instance: Instance): string => `seu-install-${instance.name}`;
 
 /**
  * Egress for one sandbox. Fixed at creation -- microsandbox has no way to

@@ -2,11 +2,10 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type Instance, type Project, resolveInstance, resolveProject, seuCommand } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
-import { stopSandbox } from '../../msb/sandbox.ts';
 import { parseArgs } from '../../common/args.ts';
 import { CONFIG_FILE } from '../../config/config.ts';
 import { existsSync } from 'node:fs';
-import { sessionSandboxName, sessionStatus } from '../../msb/session.ts';
+import { sessionSandboxName, sessionStatus, stopSession } from '../../msb/session.ts';
 
 export async function run(argv: string[]): Promise<void> {
     const { name } = parseArgs(argv, { command: 'stop', defaults: {} });
@@ -27,7 +26,7 @@ export async function run(argv: string[]): Promise<void> {
     if (status === 'stopped' || status === 'crashed' || status === 'created') {
         LOG.ok(`${sandbox} is not running (${status})`);
     } else {
-        await stopSandbox(sandbox);
+        await stopSession(instance);
         LOG.ok('stopped');
     }
 

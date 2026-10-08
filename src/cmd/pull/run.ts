@@ -10,7 +10,7 @@ import { die } from '../../common/error.ts';
 import { execOnHost } from '../../host/exec.ts';
 import { type Project, resolveInstance, resolveProject } from '../../config/project.ts';
 import { resumeSession } from '../../msb/session.ts';
-import { WORK_DIR } from '../../msb/sandbox.ts';
+import { WORK_DIR } from '../../common/constants.ts';
 import { execInSandbox } from '../../msb/exec.ts';
 import { parseArgs } from '../../common/args.ts';
 

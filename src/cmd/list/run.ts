@@ -9,14 +9,12 @@
 // command set does not load the microsandbox SDK.
 
 import { join } from 'node:path';
-import type { SandboxHandle } from 'microsandbox';
 import { die } from '../../common/error.ts';
 import { parseArgs } from '../../common/args.ts';
 import { LOG } from '../../common/log.ts';
 import { resolveProject, STATE_ROOT } from '../../config/project.ts';
 import { listForwards } from '../../network/forward.ts';
-import { listSandboxes, SRC_MOUNT } from '../../msb/sandbox.ts';
-import { sessionInstanceName } from '../../msb/session.ts';
+import { listSessions, type SessionListing } from '../../msb/session.ts';
 import { listTemplates } from '../../msb/template.ts';
 
 interface Row {
@@ -29,22 +27,10 @@ interface Row {
 }
 
 /**
- * The install sandbox an older `seu start` used per SEU (see
- * `installSandboxName`); one can still be left over.
- */
-const INSTALL_SANDBOX_PREFIX = 'seu-install-';
-
-/**
  * An instance name is `<name as typed>-<8 hex digits of the worktree path>`;
  * the list shows the part that was typed.
  */
 const WORKTREE_HASH_SUFFIX = /-[0-9a-f]{8}$/;
-
-/** The slice of a sandbox's stored config this command reads. */
-interface StoredConfig {
-    image?: { Oci?: { reference?: string } };
-    mounts?: { type?: string; host?: string; guest?: string }[];
-}
 
 export async function run(argv: string[]): Promise<void> {
     const { hereOnly } = parseArgs(argv, {
@@ -58,9 +44,8 @@ export async function run(argv: string[]): Promise<void> {
     const here = await currentWorktree();
     if (hereOnly && here === undefined) die('--here needs to be run inside a git worktree');
 
-    const rows = (await listSandboxes())
-        .map((sandbox) => toRow(sandbox, here))
-        .filter((row): row is Row => row !== undefined)
+    const rows = (await listSessions())
+        .map((listing) => toRow(listing, here))
         .filter((row) => !hereOnly || row.here)
         .sort((a, b) => a.worktree.localeCompare(b.worktree) || a.name.localeCompare(b.name));
 
@@ -98,37 +83,18 @@ async function currentWorktree(): Promise<string | undefined> {
     }
 }
 
-function toRow(sandbox: SandboxHandle, here: string | undefined): Row | undefined {
-    const session = sessionInstanceName(sandbox.name);
-    const install = sandbox.name.startsWith(INSTALL_SANDBOX_PREFIX)
-        ? sandbox.name.slice(INSTALL_SANDBOX_PREFIX.length)
-        : undefined;
-    // Template install sandboxes and anything else that is not a SEU.
-    const instanceName = session ?? install;
-    if (instanceName === undefined) return undefined;
-
-    let config: StoredConfig = {};
-    try {
-        config = JSON.parse(sandbox.configJson) as StoredConfig;
-    } catch {
-        // A sandbox whose config cannot be read is still worth a line.
-    }
-
-    const worktree = config.mounts?.find((m) => m.type === 'Bind' && m.guest === SRC_MOUNT)?.host;
-    // Anything named like a SEU but not mounting a worktree at /src is not one.
-    if (worktree === undefined) return undefined;
-
-    const forwards = install !== undefined
+function toRow(listing: SessionListing, here: string | undefined): Row {
+    const forwards = listing.installing
         ? []
-        : listForwards({ stateDir: join(STATE_ROOT, instanceName) }).map((f) => `${f.host}->${f.guest}`);
+        : listForwards({ stateDir: join(STATE_ROOT, listing.instanceName) }).map((f) => `${f.host}->${f.guest}`);
 
     return {
-        name: instanceName.replace(WORKTREE_HASH_SUFFIX, ''),
-        status: install !== undefined ? `installing (${sandbox.status})` : sandbox.status,
-        image: config.image?.Oci?.reference ?? '?',
+        name: listing.instanceName.replace(WORKTREE_HASH_SUFFIX, ''),
+        status: listing.installing ? `installing (${listing.status})` : listing.status,
+        image: listing.image ?? '?',
         forwards: forwards.join(',') || '-',
-        worktree,
-        here: worktree === here,
+        worktree: listing.worktree,
+        here: listing.worktree === here,
     };
 }
 

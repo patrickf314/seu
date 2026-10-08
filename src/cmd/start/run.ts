@@ -37,7 +37,7 @@ import {
 } from '../../msb/session.ts';
 import { guardUnsavedWork, syncWorkToSource } from '../../common/work.ts';
 import { stopAllForwards } from '../../network/forward.ts';
-import { WORK_DIR } from '../../msb/sandbox.ts';
+import { WORK_DIR } from '../../common/constants.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { shell } from '../../msb/shell.ts';
 import { installClaudeSettings } from '../../claude/settings.ts';

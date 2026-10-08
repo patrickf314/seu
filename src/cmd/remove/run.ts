@@ -11,10 +11,20 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type Instance, resolveInstance, resolveProject, seuCommand } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
-import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
+import {
+    clearSession,
+    installSandboxName,
+    installSandboxStatus,
+    removeInstallSandbox,
+    removeSessionVolume,
+    resumeSession,
+    sessionSandboxName,
+    sessionStatus,
+    sessionVolumeExists,
+    sessionVolumeName,
+} from '../../msb/session.ts';
 import { guardUnsavedWork } from '../../common/work.ts';
-import { installSandboxName, removeSandbox, sandboxStatus, WORK_DIR } from '../../msb/sandbox.ts';
-import { removeVolume, volumeExists, volumeName } from '../../msb/volume.ts';
+import { WORK_DIR } from '../../common/constants.ts';
 import { parseArgs } from '../../common/args.ts';
 
 interface RemoveOptions {
@@ -37,31 +47,32 @@ export async function run(argv: string[]): Promise<void> {
     const instance = resolveInstance(await resolveProject(), opts.name);
     const session = sessionSandboxName(instance);
     const install = installSandboxName(instance);
+    const volume = sessionVolumeName(instance);
 
-    const sessionStatus = await sandboxStatus(session);
-    const installStatus = await sandboxStatus(install);
-    const hasVolume = !opts.keepVolume && (await volumeExists(volumeName(instance.name)));
+    const status = await sessionStatus(instance);
+    const installStatus = await installSandboxStatus(instance);
+    const hasVolume = !opts.keepVolume && (await sessionVolumeExists(instance));
 
-    if (sessionStatus === 'absent' && installStatus === 'absent' && !hasVolume) {
+    if (status === 'absent' && installStatus === 'absent' && !hasVolume) {
         die(`there is no SEU called ${instance.name} in this worktree -- \`seu list --here\` shows them`);
     }
 
     LOG.step(`Removing SEU ${instance.name}`);
-    if (sessionStatus !== 'absent') LOG.info(`sandbox ${session} (${sessionStatus})`);
+    if (status !== 'absent') LOG.info(`sandbox ${session} (${status})`);
     if (installStatus !== 'absent') LOG.info(`sandbox ${install} (${installStatus})`);
-    if (hasVolume) LOG.info(`volume  ${volumeName(instance.name)} -- ~/work, ~/.m2, ~/.cache, Docker images`);
+    if (hasVolume) LOG.info(`volume  ${volume} -- ~/work, ~/.m2, ~/.cache, Docker images`);
     if (opts.keepVolume) LOG.info('the volume is kept (--keep-volume)');
 
     // The volume is where unpulled work lives; with it kept, nothing is lost.
-    if (!opts.keepVolume) await checkWork(instance, sessionStatus, opts.force);
+    if (!opts.keepVolume) await checkWork(instance, status, opts.force);
     if (!opts.yes) await confirm(instance);
 
     if (installStatus !== 'absent') {
-        await removeSandbox(install);
+        await removeInstallSandbox(instance);
         LOG.ok(`removed ${install}`);
     }
-    if (sessionStatus !== 'absent') {
-        await removeSandbox(session);
+    if (status !== 'absent') {
+        await clearSession(instance);
         LOG.ok(`removed ${session}`);
     }
 
@@ -71,7 +82,7 @@ export async function run(argv: string[]): Promise<void> {
 
     if (opts.keepVolume) return;
 
-    if (await removeVolume(volumeName(instance.name))) LOG.ok(`removed ${volumeName(instance.name)}`);
+    if (await removeSessionVolume(instance)) LOG.ok(`removed ${volume}`);
     removeState(instance);
 }
 
