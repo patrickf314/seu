@@ -21,14 +21,14 @@
 
 import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
-import { sleep } from '../host.ts';
+import { sleep } from '../common/utils.ts';
 import { execOnHost } from '../host/exec.ts';
 import { sdk } from '../msb/sdk.ts';
-import { STATE_ROOT, type Instance } from '../config/project.ts';
+import { type Instance, STATE_ROOT } from '../config/project.ts';
 
 /**
  * Forwards are recorded per SEU, in its state dir, and that is all they need
@@ -57,8 +57,6 @@ export interface ActiveForward extends PortSpec {
  */
 const READY_TIMEOUT_SECS = 15;
 
-// --------------------------------------------------------------- parsing
-
 /**
  * A spec is docker's: GUEST, HOST:GUEST or BIND:HOST:GUEST.
  *
@@ -67,28 +65,15 @@ const READY_TIMEOUT_SECS = 15;
  * 127.0.0.1 rather than 0.0.0.0: a forward into a sandbox should not quietly
  * publish that sandbox to the local network. Ask for `*:` to do that.
  */
-export function parsePortSpec(raw: string): PortSpec {
-    let spec = raw;
-
-    const protocol = /\/(tcp|udp)$/i.exec(spec);
-    if (protocol !== null) {
-        if (protocol[1].toLowerCase() === 'udp') {
-            die(`ssh -L forwards TCP only, so ${raw} is not supported`);
-        }
-        spec = spec.slice(0, protocol.index);
-    }
-
-    const [rawBind, rawHost, rawGuest] = split(spec, raw);
-
-    const bind = rawBind === '*' ? '0.0.0.0' : rawBind === 'localhost' ? '127.0.0.1' : rawBind;
-    if (!isIPv4(bind)) {
-        die(`not a usable bind address: ${rawBind} (use an IPv4 literal, localhost or *)`);
-    }
-
-    return { bind, host: parsePort(rawHost), guest: parsePort(rawGuest) };
+export function parsePortSpec(spec: string): PortSpec {
+    const [rawBind, rawHost, rawGuest] = split(spec);
+    const bind = parseBind(rawBind);
+    const host = parsePort(rawHost);
+    const guest = parsePort(rawGuest);
+    return { bind, host, guest };
 }
 
-function split(spec: string, raw: string): [string, string, string] {
+function split(spec: string): [string, string, string] {
     const parts = spec.split(':');
     switch (parts.length) {
         case 1:
@@ -98,17 +83,31 @@ function split(spec: string, raw: string): [string, string, string] {
         case 3:
             return [parts[0], parts[1], parts[2]];
         default:
-            return die(`not a usable port spec: ${raw} (expected PORT, HOST:GUEST or BIND:HOST:GUEST)`);
+            return die(`not a usable port spec: ${spec} (expected PORT, HOST:GUEST or BIND:HOST:GUEST)`);
     }
 }
 
-const isIPv4 = (value: string): boolean =>
-    /^\d{1,3}(\.\d{1,3}){3}$/.test(value) && value.split('.').every((o) => Number(o) <= 255);
+function parseBind(value: string) {
+    const bind = value === '*' ? '0.0.0.0' : value === 'localhost' ? '127.0.0.1' : value;
+    const isIPv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(value)
+        && value.split('.').every((o) => Number(o) <= 255);
+
+    if (!isIPv4) {
+        die(`not a usable bind address: ${value} (use an IPv4 literal, localhost or *)`);
+    }
+    return bind;
+}
 
 export function parsePort(value: string): number {
-    if (!/^\d{1,5}$/.test(value)) die(`not a usable port: ${value} (1-65535)`);
+    if (!/^\d{1,5}$/.test(value)) {
+        die(`not a usable port: ${value} (1-65535)`);
+    }
+
     const port = Number(value);
-    if (port < 1 || port > 65535) die(`not a usable port: ${value} (1-65535)`);
+    if (port < 1 || port > 65535) {
+        die(`not a usable port: ${value} (1-65535)`);
+    }
+
     return port;
 }
 
@@ -219,7 +218,9 @@ export async function prepareTunnels(sandbox: string): Promise<Tunnels> {
     const msb = await msbPath();
 
     const authorize = await execOnHost({ cmd: msb, args: ['ssh', 'authorize', '--file', `${key}.pub`] });
-    if (authorize.code !== 0) die(`msb ssh authorize failed for ${key}.pub`);
+    if (authorize.code !== 0) {
+        die(`msb ssh authorize failed for ${key}.pub`);
+    }
 
     return { sandbox, sshArgs: sshArgs(sandbox, key, msb) };
 }
@@ -230,7 +231,10 @@ async function sshKey(): Promise<string> {
     if (existsSync(key)) return key;
 
     mkdirSync(dir, { recursive: true });
-    const generated = await execOnHost({ cmd: 'ssh-keygen', args: ['-t', 'ed25519', '-N', '', '-C', 'seu', '-f', key, '-q'] }).catch(
+    const generated = await execOnHost({
+        cmd: 'ssh-keygen',
+        args: ['-t', 'ed25519', '-N', '', '-C', 'seu', '-f', key, '-q']
+    }).catch(
         (err: Error) => die(`seu port needs OpenSSH: ${err.message}`),
     );
     if (generated.code !== 0) die(`could not generate the seu SSH key at ${key}`);
@@ -266,7 +270,7 @@ function sshArgs(sandbox: string, key: string, msb: string): string[] {
 }
 
 /** ProxyCommand is handed to /bin/sh, and the SDK's msb lives under node_modules. */
-const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+const quote = (value: string): string => `'${value.replaceAll('\'', `'\\''`)}'`;
 
 // ------------------------------------------------------------- the tunnels
 
@@ -344,7 +348,8 @@ function spawnTunnel(instance: ForwardOwner, tunnels: Tunnels, spec: PortSpec): 
         );
         // Without a listener an ENOENT here is an unhandled 'error' event; the
         // readiness loop reports it as the dead pid it is.
-        child.on('error', () => {});
+        child.on('error', () => {
+        });
         child.unref();
         return child.pid;
     } finally {
@@ -384,7 +389,10 @@ export function hostPortListening(bind: string, port: number): Promise<boolean> 
 
 /** Who is sitting on the port, when lsof can say. Diagnosis, never a check. */
 async function portHolder(port: number): Promise<string | undefined> {
-    const listing = await execOnHost({ cmd: 'lsof', args: ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'] }).catch(() => undefined);
+    const listing = await execOnHost({
+        cmd: 'lsof',
+        args: ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']
+    }).catch(() => undefined);
     const line = listing?.stdout.split('\n')[1]?.trim().split(/\s+/);
     return line !== undefined && line.length > 1 ? `held by ${line[0]} (pid ${line[1]})` : undefined;
 }

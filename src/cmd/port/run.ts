@@ -21,53 +21,27 @@ import {
     stopAllForwards,
     stopForward,
 } from '../../network/forward.ts';
+import { parseArgs } from '../../common/args.ts';
 
 interface PortOptions {
-    name: string | undefined;
     readonly specs: string[];
     readonly stops: number[];
     stopAll: boolean;
     list: boolean;
 }
 
-function parseArgs(argv: string[]): PortOptions {
-    const opts: PortOptions = { name: undefined, specs: [], stops: [], stopAll: false, list: false };
-
-    for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i];
-        switch (arg) {
-            case '--stop': {
-                const port = argv[++i];
-                if (port === undefined) die('--stop needs a host port');
-                opts.stops.push(parsePort(port));
-                break;
-            }
-            // An option rather than a leading positional: a spec is a
-            // positional too, and `8080` is a perfectly good SEU name.
-            case '--name':
-            case '-n': {
-                const name = argv[++i];
-                if (name === undefined) die(`${arg} needs a SEU name`);
-                opts.name = name;
-                break;
-            }
-            case '--stop-all':
-                opts.stopAll = true;
-                break;
-            case '--list':
-            case '-l':
-                opts.list = true;
-                break;
-            default:
-                if (arg.startsWith('-')) die(`unknown option for port: ${arg}`);
-                opts.specs.push(arg);
-        }
-    }
-    return opts;
-}
-
 export async function run(argv: string[]): Promise<void> {
-    const opts = parseArgs(argv);
+    const opts = parseArgs<PortOptions>(argv, {
+        command: 'port',
+        defaults: { specs: [], stops: [], stopAll: false, list: false },
+        flags: {
+            '--stop': (opts, value) => opts.stops.push(parsePort(value())),
+            '--stop-all': { stopAll: true },
+            '--list': { list: true },
+            '-l': { list: true },
+        },
+        positional: (opts, arg) => opts.specs.push(arg),
+    });
     const project = await resolveProject();
     const instance = resolveInstance(project, opts.name);
 
@@ -122,7 +96,7 @@ function stop(instance: Instance, ports: number[]): void {
         if (wasUp) {
             LOG.ok(`host port ${port} released`);
         } else {
-            LOG.info(`host port ${port} was not forwarded`);
+            LOG.warn(`host port ${port} was not forwarded`);
         }
     }
 }

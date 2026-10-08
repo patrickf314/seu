@@ -29,6 +29,7 @@
     "lib",
     "vm",
     "config",
+    "resources",
     "README.md"
   ]
 }

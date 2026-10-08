@@ -8,10 +8,11 @@ import { join } from 'node:path';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { execOnHost } from '../../host/exec.ts';
-import { type Project, resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
+import { type Project, resolveInstance, resolveProject } from '../../config/project.ts';
 import { requireSession } from '../../session.ts';
 import { WORK_DIR } from '../../sandbox.ts';
 import { execInSandbox } from '../../msb/exec.ts';
+import { parseArgs } from '../../common/args.ts';
 
 /** Where the bundle is written inside the guest before it is copied out. */
 const GUEST_BUNDLE = '/tmp/seu.bundle';
@@ -20,13 +21,12 @@ const GUEST_BUNDLE = '/tmp/seu.bundle';
 const BUNDLE_TIMEOUT_MS = 5 * 60_000;
 
 export async function run(argv: string[]): Promise<void> {
-    const { name, rest } = takeInstanceName(argv);
-    for (const arg of rest) die(arg.startsWith('-') ? `unknown option for pull: ${arg}` : `pull takes one name, not ${arg}`);
+    const { name } = parseArgs(argv, { command: 'pull', defaults: {} });
 
     const project = await resolveProject();
     const instance = resolveInstance(project, name);
     const session = await requireSession(instance);
-    const bundle = join(instance.stateDir, `${instance.slug}.bundle`);
+    const bundle = join(instance.stateDir, `${instance.name}.bundle`);
     mkdirSync(instance.stateDir, { recursive: true });
 
     LOG.step(`Bundling ${WORK_DIR}`);

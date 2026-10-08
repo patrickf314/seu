@@ -39,7 +39,7 @@ export const LOG = {
     },
 
     warn: (msg: string): void => {
-        println(`  ${ASCII_CODE.YELLOW}[warn]  ${ASCII_CODE.OFF} ${msg}`);
+        println(`  ${ASCII_CODE.YELLOW}[warn]   ${ASCII_CODE.OFF} ${msg}`);
     },
     error: (msg: string): void => {
         println(`  ${ASCII_CODE.RED}[error]${ASCII_CODE.OFF} ${msg}`);

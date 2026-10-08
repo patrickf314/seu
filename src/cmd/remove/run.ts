@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { type Instance, resolveInstance, resolveProject, seuCommand, takeInstanceName } from '../../config/project.ts';
+import { type Instance, resolveInstance, resolveProject, seuCommand } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
 import { requireSession } from '../../session.ts';
 import { guardUnsavedWork } from '../../common/work.ts';
@@ -20,49 +20,35 @@ import {
     sandboxStatus,
     sessionSandboxName,
     volumeExists,
-    volumeName,
     WORK_DIR,
 } from '../../sandbox.ts';
+import { volumeName } from '../../msb/volume.ts';
+import { parseArgs } from '../../common/args.ts';
 
 interface RemoveOptions {
-    name: string | undefined;
     keepVolume: boolean;
     yes: boolean;
     force: boolean;
 }
 
-function parseArgs(argv: string[]): RemoveOptions {
-    const { name, rest } = takeInstanceName(argv);
-    const opts: RemoveOptions = { name, keepVolume: false, yes: false, force: false };
-
-    for (const arg of rest) {
-        switch (arg) {
-            case '--keep-volume':
-                opts.keepVolume = true;
-                break;
-            case '--yes':
-            case '-y':
-                opts.yes = true;
-                break;
-            case '--force':
-                opts.force = true;
-                break;
-            default:
-                die(arg.startsWith('-') ? `unknown option for remove: ${arg}` : `remove takes one name, not ${arg}`);
-        }
-    }
-    return opts;
-}
-
 export async function run(argv: string[]): Promise<void> {
-    const opts = parseArgs(argv);
+    const opts = parseArgs<RemoveOptions>(argv, {
+        command: 'remove',
+        defaults: { keepVolume: false, yes: false, force: false },
+        flags: {
+            '--keep-volume': { keepVolume: true },
+            '--yes': { yes: true },
+            '-y': { yes: true },
+            '--force': { force: true },
+        },
+    });
     const instance = resolveInstance(await resolveProject(), opts.name);
     const session = sessionSandboxName(instance);
     const install = installSandboxName(instance);
 
     const sessionStatus = await sandboxStatus(session);
     const installStatus = await sandboxStatus(install);
-    const hasVolume = !opts.keepVolume && (await volumeExists(volumeName(instance.slug)));
+    const hasVolume = !opts.keepVolume && (await volumeExists(volumeName(instance.name)));
 
     if (sessionStatus === 'absent' && installStatus === 'absent' && !hasVolume) {
         die(`there is no SEU called ${instance.name} in this worktree -- \`seu list --here\` shows them`);
@@ -71,7 +57,7 @@ export async function run(argv: string[]): Promise<void> {
     LOG.step(`Removing SEU ${instance.name}`);
     if (sessionStatus !== 'absent') LOG.info(`sandbox ${session} (${sessionStatus})`);
     if (installStatus !== 'absent') LOG.info(`sandbox ${install} (${installStatus})`);
-    if (hasVolume) LOG.info(`volume  ${volumeName(instance.slug)} -- /work, ~/.m2, ~/.cache, Docker images`);
+    if (hasVolume) LOG.info(`volume  ${volumeName(instance.name)} -- /work, ~/.m2, ~/.cache, Docker images`);
     if (opts.keepVolume) LOG.info('the volume is kept (--keep-volume)');
 
     // The volume is where unpulled work lives; with it kept, nothing is lost.
@@ -93,7 +79,7 @@ export async function run(argv: string[]): Promise<void> {
 
     if (opts.keepVolume) return;
 
-    if (await removeVolume(volumeName(instance.slug))) LOG.ok(`removed ${volumeName(instance.slug)}`);
+    if (await removeVolume(volumeName(instance.name))) LOG.ok(`removed ${volumeName(instance.name)}`);
     removeState(instance);
 }
 

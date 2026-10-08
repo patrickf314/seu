@@ -4,7 +4,7 @@ import type { Command } from '../command.ts';
 
 export const PULL: Command = {
     name: 'pull',
-    args: '[name]',
+    args: '[--name <name>]',
     summary: 'fetch the commits you made in /work back onto the host',
 
     details: `Work done in the sandbox comes home as git objects, over a bundle.
@@ -16,6 +16,10 @@ On the host the bundle is wired up as a git remote and fetched. Nothing is merge
 The remote is named after the SEU -- \`seu-<name>\`, which by default is the worktree's directory name -- because worktrees of one repository, and SEUs of one worktree, share a ref namespace, and a fixed name would make two of them overwrite each other's fetched refs. SEU_REMOTE overrides it.
 
 This needs at least one commit in /work: a bundle of nothing is an error, not an empty bundle.`,
+
+    options: [
+        { flag: '--name, -n <name>', text: 'the SEU to pull from; default: the worktree\'s directory name' },
+    ],
 
     async run(argv: string[]): Promise<void> {
         // Imported here rather than at the top: the flow is what pulls in the

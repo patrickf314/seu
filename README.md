@@ -89,9 +89,9 @@ its own named volume (so its own `/work`, `~/.m2` and Docker images) and its own
 port forwards. Only the image and the template are shared.
 
 ```bash
-./seu/bin/seu start review          # a second SEU next to the default one
-./seu/bin/seu shell review
-./seu/bin/seu pull review           # fetched as remote seu-review
+./seu/bin/seu start -n review       # a second SEU next to the default one
+./seu/bin/seu shell -n review
+./seu/bin/seu pull -n review        # fetched as remote seu-review
 ./seu/bin/seu port -n review 8081:8080
 ```
 
@@ -104,8 +104,8 @@ only those). It reads the sandboxes themselves, so there is no registry to go
 stale.
 
 ```bash
-./seu/bin/seu stop [name]           # stop the session; the volume keeps everything
-./seu/bin/seu remove [name]         # delete the SEU: sandboxes, volume, state
+./seu/bin/seu stop [-n name]        # stop the session; the volume keeps everything
+./seu/bin/seu remove [-n name]      # delete the SEU: sandboxes, volume, state
 ```
 
 `stop` drops the SEU's port forwards too; `seu start` or `seu shell` resumes it

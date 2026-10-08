@@ -12,9 +12,9 @@
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { sleep } from '../../host.ts';
+import { sleep } from '../../common/utils.ts';
+import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { execOnHost } from '../../host/exec.ts';
-import { loadConfig } from '../../config/config.ts';
 import { resolveInstance, resolveProject } from '../../config/project.ts';
 import { requireSession } from '../../session.ts';
 import { sessionSandboxName, WORK_DIR } from '../../sandbox.ts';
@@ -39,7 +39,6 @@ const LAST_PORT = 9333;
 const READY_TIMEOUT_MS = 2 * 60_000;
 
 interface TraceOptions {
-    name: string | undefined;
     trace: string | undefined;
     port: number | undefined;
     pom: string | undefined;
@@ -47,36 +46,21 @@ interface TraceOptions {
 }
 
 export async function run(argv: string[]): Promise<number> {
-    return trace(parseTraceArgs(argv));
-}
-
-function parseTraceArgs(argv: string[]): TraceOptions {
-    const opts: TraceOptions = { name: undefined, trace: undefined, port: undefined, pom: undefined, open: true };
-    const value = (i: number, flag: string): string => argv[i] ?? die(`${flag} needs a value`);
-
-    for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i];
-        switch (arg) {
-            case '--name':
-            case '-n':
-                opts.name = value(++i, arg);
-                break;
-            case '--port':
-                opts.port = parsePort(value(++i, arg));
-                break;
-            case '--pom':
-                opts.pom = guestPath(value(++i, arg), 'pom');
-                break;
-            case '--no-open':
-                opts.open = false;
-                break;
-            default:
-                if (arg.startsWith('-')) die(`unknown option for playwright: ${arg}`);
+    return trace(
+        parseArgs<TraceOptions>(argv, {
+            command: 'playwright',
+            defaults: { trace: undefined, port: undefined, pom: undefined, open: true },
+            flags: {
+                '--port': (opts, value) => (opts.port = parsePort(value())),
+                '--pom': (opts, value) => (opts.pom = guestPath(value(), 'pom')),
+                '--no-open': { open: false },
+            },
+            positional: (opts, arg) => {
                 if (opts.trace !== undefined) die(`one trace at a time, got ${opts.trace} and ${arg}`);
                 opts.trace = guestPath(arg, 'trace');
-        }
-    }
-    return opts;
+            }
+        }),
+    );
 }
 
 /**
@@ -92,12 +76,12 @@ function guestPath(raw: string, what: string): string {
     return rel;
 }
 
-async function trace(opts: TraceOptions): Promise<number> {
+async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
     if (opts.trace === undefined) die('which trace? e.g. `seu playwright club/ui/target/trace.zip`');
 
     const project = await resolveProject();
     const instance = resolveInstance(project, opts.name);
-    const configured = opts.pom ?? loadConfig(project).playwright.pom;
+    const configured = opts.pom;
 
     const session = await requireSession(instance);
     await requireFile(session.sandbox, opts.trace, 'trace');
@@ -109,8 +93,8 @@ async function trace(opts: TraceOptions): Promise<number> {
     } else {
         pom =
             (await guessPom(session.sandbox, opts.trace)) ??
-            die('which module has Playwright on its classpath? set playwright.pom in .seu/config.json or pass --pom');
-        LOG.info(`using ${WORK_DIR}/${pom}; pass --pom or set playwright.pom if that is the wrong module`);
+            die('which module has Playwright on its classpath? pass --pom');
+        LOG.info(`using ${WORK_DIR}/${pom}; pass --pom if that is the wrong module`);
     }
 
     const port = opts.port ?? (await freePort());

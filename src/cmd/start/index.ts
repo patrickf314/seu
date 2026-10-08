@@ -4,12 +4,12 @@ import type { Command } from '../command.ts';
 
 export const START: Command = {
     name: 'start',
-    args: '[name] [options]',
+    args: '[options]',
     summary: 'start a SEU and open a shell in it, creating it from the project template if needed',
 
     details: `Brings this worktree to a shell in a running session, doing only what is still missing.
 
-A worktree can have several SEUs side by side. Each is named -- by default after the worktree's directory -- and has its own session sandbox, its own named volume (and with it its own /work clone, ~/.m2 and Docker images) and its own port forwards. \`seu start review\` next to \`seu start\` gives you a second, independent sandbox of the same checkout.
+A worktree can have several SEUs side by side. Each is named -- by default after the worktree's directory -- and has its own session sandbox, its own named volume (and with it its own /work clone, ~/.m2 and Docker images) and its own port forwards. \`seu start --name review\` next to \`seu start\` gives you a second, independent sandbox of the same checkout.
 
 What happens depends on what is already there:
 
@@ -53,6 +53,7 @@ Unlike everything else in the profile, a script step is a shell command by desig
 Your own ~/.m2/repository is mounted read-only at /host-m2 in the install sandbox and declared there as a \`file://\` repository, ahead of the real remotes. Artifacts you already have -- private ones too -- are copied out of it rather than downloaded, so no credential is needed in there and your ~/.m2/settings.xml is never read. Afterwards the resolution tracking files are cleared and settings.xml is replaced with an offline one, without which the session cannot resolve what was just fetched for it. --no-host-m2 turns it off; SEU_HOST_M2 relocates it.`,
 
     options: [
+        { flag: '--name, -n <name>', text: 'the SEU to start; default: the worktree\'s directory name' },
         { flag: '--reinstall', text: 'rebuild the template, and recreate this SEU from it' },
         { flag: '--force', text: 'with --reinstall: discard work in /work that the host does not have' },
         { flag: '--detach, -d', text: 'start the session but do not open a shell in it' },

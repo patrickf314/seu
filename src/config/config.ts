@@ -84,13 +84,6 @@ const MiseStep = z
     })
     .strict();
 
-/**
- * The one value in this file that is meant to BE a command. Everything else is
- * validated into a shape no shell can misread; this is handed to `bash -lc` as
- * written, because "build this project" has no smaller vocabulary than the
- * project's own build tool. It only ever runs inside the guest, as `seu`, in a
- * sandbox that is thrown away afterwards -- the host never sees it.
- */
 const ScriptStep = z
     .object({
         type: z.literal('script'),
@@ -106,23 +99,13 @@ const InstallStepSchema = z.discriminatedUnion('type', [
     ScriptStep,
 ]);
 
-/**
- * A `seu port` spec, as on the command line: `8080`, `"5173:5173"`,
- * `"0.0.0.0:8080:8080"`. Only the shape is checked here; `seu port` parses it
- * properly before any tunnel starts.
- */
 const PortSpec = z.union([
     z.number().int().transform(String),
-    z.string().regex(/^[0-9A-Za-z.*]+(:[0-9]+){0,2}(\/tcp)?$/i, 'must be a port spec, e.g. 8080 or "5173:5173"'),
+    z.string().regex(/^[0-9A-Za-z.*]+(:[0-9]+){0,2}$/i, 'must be a port spec, e.g. 8080 or "5173:5173"'),
 ]);
 
 const EnvName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name');
 
-/**
- * A 1Password secret reference, `op://vault/item/[section/]field`. Only
- * references are accepted, never values: this file is committed, and a token
- * pasted into it would be too.
- */
 const SecretReference = z
     .string()
     .regex(
@@ -148,19 +131,6 @@ const SeuConfigSchema = z
             .refine((steps) => steps.filter((s) => s.type === 'mise').length <= 1, 'at most one mise step')
             .optional(),
 
-        playwright: z
-            .object({
-                /**
-                 * The module whose pom puts the Playwright Java client on the
-                 * classpath. `seu playwright` runs Playwright's own CLI through
-                 * it, because the CLI -- trace viewer included -- ships inside
-                 * that jar and nowhere else in the VM.
-                 */
-                pom: ProjectPath.optional(),
-            })
-            .strict()
-            .optional(),
-
         /**
          * What a bare `seu port` forwards: the project's usual dev servers, so
          * nobody has to remember them.
@@ -180,11 +150,6 @@ export type InstallStep = z.infer<typeof InstallStepSchema>;
 
 export interface SeuConfig {
     /**
-     * The config file, or undefined when the project has none.
-     */
-    readonly file: string | undefined;
-
-    /**
      * The microsandbox image reference.
      */
     readonly image: string;
@@ -199,14 +164,6 @@ export interface SeuConfig {
      * step's `toml` is absolute.
      */
     readonly install: readonly InstallStep[];
-
-    readonly playwright: {
-        /**
-         * Relative to the worktree, without a leading `./`; undefined when the
-         * project names none.
-         */
-        readonly pom: string | undefined;
-    };
 
     /**
      * Port specs a bare `seu port` forwards, unparsed; empty when the project
@@ -229,24 +186,22 @@ export interface SeuConfig {
  * should have to know what the defaults were.
  */
 export function loadConfig(project: Project): SeuConfig {
-    const file = join(project.root, CONFIG_FILE);
-    const configFileExists = existsSync(file);
-    const config = configFileExists ? parse(file) : {};
+    const config = parseConfig(project.configFile);
 
     return {
-        file: configFileExists ? file : undefined,
         image: config.image ?? DEFAULT_IMAGE,
         template: templateName(project),
-        install: (config.install ?? []).map((step) => (step.type === 'mise' ? resolveMise(project, file, step) : step)),
-        playwright: {
-            pom: config.playwright?.pom?.replace(/^\.\//, ''),
-        },
+        install: (config.install ?? []).map(step => validateInstallStep(project, step)),
         ports: config.ports ?? [],
         secrets: config.secrets ?? {},
     };
 }
 
-function parse(file: string): SeuConfigFile {
+function parseConfig(file: string): SeuConfigFile {
+    if (!existsSync(file)) {
+        return {};
+    }
+
     let json: unknown;
     try {
         json = JSON.parse(readFileSync(file, 'utf8'));
@@ -255,10 +210,10 @@ function parse(file: string): SeuConfigFile {
     }
 
     const result = SeuConfigSchema.safeParse(json);
-    if (result.success) return result.data;
+    if (result.success) {
+        return result.data;
+    }
 
-    // `install[5].artifact: the version comes third ...`, one per
-    // problem: the path is what tells you which line of the file to look at.
     const issues = result.error.issues.map((issue) => {
         const path = issue.path
             .map((key, i) => (typeof key === 'number' ? `[${key}]` : `${i === 0 ? '' : '.'}${String(key)}`))
@@ -268,11 +223,6 @@ function parse(file: string): SeuConfigFile {
     die(`${file}: invalid\n    ${issues.join('\n    ')}`);
 }
 
-/**
- * The worktree's own directory name, lowercased and stripped of anything a
- * volume name cannot hold -- `Projekte/Private/website-react` becomes
- * `website-react`.
- */
 function templateName(project: Project): string {
     const name = project.name.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
     if (!/^[a-z0-9]/.test(name)) {
@@ -281,15 +231,14 @@ function templateName(project: Project): string {
     return name;
 }
 
-/**
- * The mise step's `toml`, made absolute. Configured-but-absent is a typo, not
- * a project without a toolchain, so it fails rather than silently producing a
- * JDK-less template.
- */
-function resolveMise(project: Project, file: string, step: InstallStep & { type: 'mise' }): InstallStep {
-    const path = join(project.root, step.toml.replace(/^\.\//, ''));
-    if (!existsSync(path) || !statSync(path).isFile()) {
-        die(`${file}: install mise step: ${step.toml} does not exist`);
+function validateInstallStep(project: Project, step: InstallStep): InstallStep {
+    if (step.type === 'mise') {
+        const path = join(project.root, step.toml.replace(/^\.\//, ''));
+        if (!existsSync(path) || !statSync(path).isFile()) {
+            die(`${project.configFile}: install mise step: ${step.toml} does not exist`);
+        }
+        return { ...step, toml: path };
     }
-    return { ...step, toml: path };
+
+    return step;
 }

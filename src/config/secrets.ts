@@ -9,6 +9,7 @@
 import { execOnHost } from '../host/exec.ts';
 import { LOG } from '../common/log.ts';
 import type { SeuConfig } from './config.ts';
+import { die } from '../common/error.ts';
 
 /**
  * The profile's secrets, read from 1Password. A secret that cannot be read is
@@ -17,13 +18,13 @@ import type { SeuConfig } from './config.ts';
  */
 export async function resolveSecrets(config: SeuConfig): Promise<Record<string, string>> {
     const entries = Object.entries(config.secrets);
-    if (entries.length === 0) return {};
+    if (entries.length === 0) {
+        return {};
+    }
 
-    LOG.step('Secrets');
+    LOG.debug('Resolving secrets');
     const resolved: Record<string, string> = {};
     for (const [name, reference] of entries) {
-        // The reference is printed on purpose: the profile comes from the
-        // repository, and which 1Password items it asks for is yours to see.
         try {
             const r = await execOnHost({ cmd: 'op', args: ['read', '--no-newline', reference] });
             if (r.code === 0 && r.stdout) {
@@ -32,11 +33,14 @@ export async function resolveSecrets(config: SeuConfig): Promise<Record<string, 
             } else {
                 LOG.warn(`${name}: could not read ${reference}`);
                 const detail = r.stderr.trim().split('\n').at(-1);
-                if (detail) LOG.debug(detail);
+                if (detail) {
+                    LOG.debug(detail);
+                }
             }
         } catch (err) {
-            LOG.warn(`${name}: ${(err as Error).message} -- install the 1Password CLI to resolve ${reference}`);
+            die(`${name}: ${(err as Error).message} -- install the 1Password CLI to resolve ${reference}`);
         }
     }
+
     return resolved;
 }

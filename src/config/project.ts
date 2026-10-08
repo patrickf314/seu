@@ -28,6 +28,11 @@ export const STATE_ROOT = process.env['SEU_STATE_DIR'] ?? join(SEU_ROOT, '.seu-s
 
 export interface Project {
     /**
+     * The config file
+     */
+    readonly configFile: string;
+
+    /**
      * Absolute, symlink-resolved worktree root. Mount sources must be real
      * paths: /tmp is a symlink to /private/tmp on macOS and a mount of it fails
      * with "Not a directory".
@@ -40,12 +45,6 @@ export interface Project {
      *  absolute path, so the .git *file*'s pointer resolves unchanged inside the
      *  VM. Empty for an ordinary in-tree .git, which rides along with /src. */
     gitDir: string | null;
-    /**
-     * Short hash of the worktree root. Keeps two checkouts that happen to share
-     * a directory name apart in microsandbox's global namespace.
-     */
-    hash: string;
-    confFile: string;
 }
 
 /**
@@ -55,14 +54,13 @@ export interface Project {
  */
 export interface Instance {
     readonly project: Project;
-    /** As the user types it. Defaults to the worktree's directory name. */
-    readonly name: string;
     /**
-     * `<name>-<project hash>`: what the sandbox, the volume and the state dir
-     * are named after. For the default instance this is exactly what the
-     * single-instance seu used, so existing sessions are picked up unchanged.
+     * `<name as typed>-<worktree hash>`: what the sandbox, the volume and the
+     * state dir are named after. The hash keeps two checkouts that happen to
+     * share a directory name -- or a `--name` -- apart in microsandbox's global
+     * namespace.
      */
-    readonly slug: string;
+    readonly name: string;
     readonly stateDir: string;
 }
 
@@ -98,8 +96,7 @@ export async function resolveProject(): Promise<Project> {
         root,
         name,
         gitDir,
-        hash: createHash('sha256').update(root).digest('hex').slice(0, 8),
-        confFile: join(root, CONFIG_FILE),
+        configFile: join(root, CONFIG_FILE),
     };
 }
 
@@ -114,18 +111,24 @@ export function resolveInstance(project: Project, name: string = defaultInstance
         die(`not a usable SEU name: ${name} -- letters, digits, '.', '_' and '-' only`);
     }
 
-    const slug = `${name}-${project.hash}`;
+    const instanceName = `${name}-${worktreeHash(project)}`;
     // Not created here: naming a SEU that does not exist must not leave a
     // directory behind. Whatever writes into it creates it.
-    return { project, name, slug, stateDir: join(STATE_ROOT, slug) };
+    return { project, name: instanceName, stateDir: join(STATE_ROOT, instanceName) };
+}
+
+/** Short hash of the worktree root. */
+function worktreeHash(project: Project): string {
+    return createHash('sha256').update(project.root).digest('hex').slice(0, 8);
 }
 
 /**
  * `seu <command>` as the user would type it for this instance: the name only
- * when it is not the default, which needs none.
+ * `--name` only when it is not the default, which needs none.
  */
 export function seuCommand(instance: Instance, command: string): string {
-    return instance.name === defaultInstanceName(instance.project) ? `seu ${command}` : `seu ${command} ${instance.name}`;
+    const typed = instance.name.slice(0, -`-${worktreeHash(instance.project)}`.length);
+    return typed === defaultInstanceName(instance.project) ? `seu ${command}` : `seu ${command} --name ${typed}`;
 }
 
 /** The directory name, with anything a sandbox name cannot hold replaced. */
@@ -135,14 +138,4 @@ function defaultInstanceName(project: Project): string {
         die(`cannot derive a SEU name from the directory name ${project.name} -- pass one`);
     }
     return name;
-}
-
-/**
- * Split an optional leading instance name off a command's argv. Options stay
- * where they are; a second positional is the caller's to refuse.
- */
-export function takeInstanceName(argv: readonly string[]): { name: string | undefined; rest: string[] } {
-    const index = argv.findIndex((a) => !a.startsWith('-'));
-    if (index === -1) return { name: undefined, rest: [...argv] };
-    return { name: argv[index], rest: argv.filter((_, i) => i !== index) };
 }

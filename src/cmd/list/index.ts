@@ -19,8 +19,6 @@ The list goes to stdout, everything else to stderr, so it can be piped.`,
     ],
 
     async run(argv: string[]): Promise<void> {
-        // Imported here rather than at the top: the flow is what pulls in the
-        // microsandbox SDK, and `seu help` must not need it.
         const { run } = await import('./run.ts');
         await run(argv);
     },
