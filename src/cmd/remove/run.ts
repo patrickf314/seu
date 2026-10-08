@@ -11,18 +11,10 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type Instance, resolveInstance, resolveProject, seuCommand } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
-import { requireSession } from '../../session.ts';
+import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
 import { guardUnsavedWork } from '../../common/work.ts';
-import {
-    installSandboxName,
-    removeSandbox,
-    removeVolume,
-    sandboxStatus,
-    sessionSandboxName,
-    volumeExists,
-    WORK_DIR,
-} from '../../sandbox.ts';
-import { volumeName } from '../../msb/volume.ts';
+import { installSandboxName, removeSandbox, sandboxStatus, WORK_DIR } from '../../msb/sandbox.ts';
+import { removeVolume, volumeExists, volumeName } from '../../msb/volume.ts';
 import { parseArgs } from '../../common/args.ts';
 
 interface RemoveOptions {
@@ -98,7 +90,7 @@ async function checkWork(instance: Instance, status: string, force: boolean): Pr
         );
         return;
     }
-    const session = await requireSession(instance);
+    const session = await resumeSession(instance);
     await guardUnsavedWork(instance, session.sandbox, force, 'remove');
 }
 

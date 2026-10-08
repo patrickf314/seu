@@ -2,11 +2,11 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type Instance, type Project, resolveInstance, resolveProject, seuCommand } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
-import { sessionSandboxName, stopSandbox } from '../../msb/sandbox.ts';
+import { stopSandbox } from '../../msb/sandbox.ts';
 import { parseArgs } from '../../common/args.ts';
 import { CONFIG_FILE } from '../../config/config.ts';
 import { existsSync } from 'node:fs';
-import { sessionStatus } from '../../msb/session.ts';
+import { sessionSandboxName, sessionStatus } from '../../msb/session.ts';
 
 export async function run(argv: string[]): Promise<void> {
     const { name } = parseArgs(argv, { command: 'stop', defaults: {} });

@@ -39,11 +39,6 @@ export const WORK_DIR = HOME_DIR + '/work';
 export const HOST_REPOSITORY_MOUNT = '/host-m2';
 
 /**
- * The long-lived sandbox a developer works in. One per SEU instance.
- */
-export const sessionSandboxName = (instance: Instance): string => `seu-${instance.name}`;
-
-/**
  * The install sandbox an older `seu start` used per SEU. Installs now only
  * ever happen into a template, but one of these can still be left over.
  */
@@ -291,7 +286,7 @@ async function sandboxHandle(name: string): Promise<SandboxHandle | undefined> {
     }
 }
 
-async function sandboxReady(sandbox: Sandbox): Promise<void> {
+export async function sandboxReady(sandbox: Sandbox): Promise<void> {
     for (let i = 0; i < 45; i++) {
         const probe = await execInSandbox(sandbox, { cmd: 'true', root: true, timeoutMs: 10_000 });
         if (probe.ok) {

@@ -6,7 +6,7 @@
 
 import { LOG } from '../../common/log.ts';
 import { type Instance, type Project, resolveInstance, resolveProject } from '../../config/project.ts';
-import { requireSession } from '../../session.ts';
+import { resumeSession } from '../../msb/session.ts';
 import { parseArgs } from '../../common/args.ts';
 import { CONFIG_FILE, loadConfig } from '../../config/config.ts';
 import { existsSync } from 'node:fs';
@@ -18,7 +18,7 @@ export async function run(argv: string[]): Promise<number> {
     const project = await resolveProject();
     const config = loadConfig(project);
     const instance = resolveInstance(project, name);
-    const session = await requireSession(instance);
+    const session = await resumeSession(instance);
 
     LOG.step('Metadata')
     logMetadata(project, instance);

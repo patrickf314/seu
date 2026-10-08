@@ -16,8 +16,8 @@ import { sleep } from '../../common/utils.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { execOnHost } from '../../host/exec.ts';
 import { resolveInstance, resolveProject } from '../../config/project.ts';
-import { requireSession } from '../../session.ts';
-import { sessionSandboxName, WORK_DIR } from '../../sandbox.ts';
+import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
+import { WORK_DIR } from '../../msb/sandbox.ts';
 import {
     hostPortListening,
     parsePort,
@@ -83,7 +83,7 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
     const instance = resolveInstance(project, opts.name);
     const configured = opts.pom;
 
-    const session = await requireSession(instance);
+    const session = await resumeSession(instance);
     await requireFile(session.sandbox, opts.trace, 'trace');
 
     let pom: string;

@@ -138,7 +138,7 @@ function templateVolumeName(config: SeuConfig): string {
 }
 
 function templateInstallSandboxName(config: SeuConfig): string {
-    return `${TEMPLATE_PREFIX}${config.template}`;
+    return `${templateVolumeName(config)}-install`;
 }
 
 function outdatedBecause(project: Project, config: SeuConfig, labels: Record<string, string>): string | undefined {

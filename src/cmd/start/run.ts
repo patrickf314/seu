@@ -21,21 +21,22 @@ import type { SandboxStatus } from 'microsandbox';
 import { CONFIG_FILE, loadConfig, type SeuConfig } from '../../config/config.ts';
 import { requireImage } from '../../msb/image.ts';
 import { buildTemplate, findTemplate, type Template } from '../../msb/template.ts';
-import { volumeName } from '../../msb/volume.ts';
+import { cloneVolume, removeVolume, volumeExists, volumeName } from '../../msb/volume.ts';
 import { existsSync } from 'node:fs';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { sessionNetworkPolicy } from '../../network/net.ts';
 import { type Instance, type Project, resolveInstance, resolveProject, seuCommand, } from '../../config/project.ts';
-import { clearSession, resumeSession, type Session, sessionStatus } from '../../msb/session.ts';
+import { clearSession, resumeSession, type Session, sessionSandboxName, sessionStatus } from '../../msb/session.ts';
 import { guardUnsavedWork, syncWorkToSource } from '../../common/work.ts';
 import { stopAllForwards } from '../../network/forward.ts';
 import {
     bootstrapVolume,
+    createSandbox,
     installSandboxName,
     prepareWork,
     removeSandbox,
-    sessionSandboxName,
+    sandboxReady,
     WORK_DIR,
 } from '../../msb/sandbox.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
@@ -67,8 +68,8 @@ export async function run(argv: string[]): Promise<number> {
     // the check is cheapest to fail early.
     if (opts.reinstall && status !== 'absent') {
         LOG.step(`Checking ${WORK_DIR} of ${name}`);
-        const sandbox = await resumeSession(instance);
-        await guardUnsavedWork(instance, sandbox, opts.force, 'reinstall');
+        const session = await resumeSession(instance);
+        await guardUnsavedWork(instance, session.sandbox, opts.force, 'reinstall');
     }
 
     LOG.step('Image');
@@ -149,14 +150,13 @@ async function ensureTemplate(project: Project, config: SeuConfig, opts: StartOp
 
 /** This SEU's session, any leftover install sandbox, its forwards and its volume. */
 async function discardSeu(instance: Instance): Promise<void> {
-    await clearSession(instance);
-
+    const session = sessionSandboxName(instance);
     const volume = volumeName(instance.name);
     if ((await sessionStatus(instance)) === 'absent' && !(await volumeExists(volume))) return;
 
     LOG.step(`Discarding the current ${session}`);
     await removeSandbox(installSandboxName(instance));
-    await removeSandbox(session);
+    await clearSession(instance);
     stopAllForwards(instance);
     await removeVolume(volume);
     LOG.ok(`removed ${session} and ${volume}`);
@@ -191,7 +191,7 @@ async function resume(instance: Instance, status: SandboxStatus): Promise<Sessio
 async function startSession(image: string, instance: Instance, fromTemplate: boolean): Promise<Session> {
     const name = sessionSandboxName(instance);
     LOG.step(`Creating ${name} (egress: Anthropic only)`);
-    const sandbox = await createProjectSandbox({
+    const sandbox = await createSandbox({
         name,
         image: image,
         project: instance.project,

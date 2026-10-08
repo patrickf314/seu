@@ -9,8 +9,8 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { execOnHost } from '../../host/exec.ts';
 import { type Project, resolveInstance, resolveProject } from '../../config/project.ts';
-import { requireSession } from '../../session.ts';
-import { WORK_DIR } from '../../sandbox.ts';
+import { resumeSession } from '../../msb/session.ts';
+import { WORK_DIR } from '../../msb/sandbox.ts';
 import { execInSandbox } from '../../msb/exec.ts';
 import { parseArgs } from '../../common/args.ts';
 
@@ -25,7 +25,7 @@ export async function run(argv: string[]): Promise<void> {
 
     const project = await resolveProject();
     const instance = resolveInstance(project, name);
-    const session = await requireSession(instance);
+    const session = await resumeSession(instance);
     const bundle = join(instance.stateDir, `${instance.name}.bundle`);
     mkdirSync(instance.stateDir, { recursive: true });
 

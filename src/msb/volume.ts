@@ -1,5 +1,5 @@
 import { sdk } from './sdk.ts';
-import { Volume, VolumeHandle } from 'microsandbox';
+import type { Volume, VolumeHandle } from 'microsandbox';
 import { die } from '../common/error.ts';
 import { LOG } from '../common/log.ts';
 import { dirname, join } from 'node:path';
@@ -8,9 +8,18 @@ import { execOnHost } from '../host/exec.ts';
 
 export const VOLUME_SIZE_MIB = 20 * 1024;
 
+/**
+ * The named volume of one SEU instance: /work, ~/.m2, ~/.cache, Docker images.
+ */
+export const volumeName = (instanceName: string): string => `seu-${instanceName}-data`;
+
 async function volumeHandle(name: string): Promise<VolumeHandle | undefined> {
     const { Volume } = await sdk();
     return (await Volume.list()).find((v) => v.name === name);
+}
+
+export async function volumeExists(name: string): Promise<boolean> {
+    return (await volumeHandle(name)) !== undefined;
 }
 
 /**
@@ -51,7 +60,7 @@ export async function cloneVolume(source: string, target: string, labels: Record
 
     rmSync(to, { force: true });
     const cloneResult = await execOnHost({ cmd: 'cp', args: ['-c', from, to] });
-    if (cloneResult.code !== 0) {
+    if (cloneResult.ok) {
         return targetVolume;
     }
 
@@ -74,6 +83,7 @@ export async function removeVolume(name: string): Promise<boolean> {
         return false;
     }
 
+    const { Volume } = await sdk();
     try {
         await Volume.remove(name);
         return true;

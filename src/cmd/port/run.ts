@@ -8,8 +8,7 @@ import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { loadConfig } from '../../config/config.ts';
 import { type Instance, resolveInstance, resolveProject } from '../../config/project.ts';
-import { requireSession, sessionStatus } from '../../session.ts';
-import { sessionSandboxName } from '../../sandbox.ts';
+import { resumeSession, sessionSandboxName, sessionStatus } from '../../msb/session.ts';
 import {
     forwardUp,
     listForwards,
@@ -60,7 +59,7 @@ export async function run(argv: string[]): Promise<void> {
 
     // Only the tunnels need the sandbox; the SDK is used to guarantee it is
     // running, and `msb ssh serve` does the rest by name.
-    await requireSession(instance);
+    await resumeSession(instance);
     const tunnels = await prepareTunnels(sessionSandboxName(instance));
 
     LOG.step(`Forwarding into ${tunnels.sandbox}`);
