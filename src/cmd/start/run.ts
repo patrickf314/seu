@@ -63,12 +63,7 @@ export async function run(argv: string[]): Promise<number> {
     const status = await sessionStatus(instance);
     let session: Session;
 
-    if (!opts.reinstall && status !== 'absent') {
-        LOG.step(`Resuming ${name}`);
-        session = await resume(config, instance, status);
-    } else {
-        // Before anything is rebuilt: a reinstall replaces this SEU's volume,
-        // and the check is cheapest to fail early.
+    if (opts.reinstall || status === 'absent') {
         if (opts.reinstall && status !== 'absent') {
             LOG.step(`Checking ${WORK_DIR} of ${name}`);
             await checkUnsavedWork(instance, opts.force);
@@ -105,6 +100,9 @@ export async function run(argv: string[]): Promise<number> {
         LOG.step(`Preparing ${WORK_DIR}`);
         await prepareSession(config, sandbox, fromTemplate);
         session = { name, sandbox, resumed: false };
+    } else {
+        LOG.step(`Resuming ${name}`);
+        session = await resume(config, instance, status);
     }
 
     // No shell when asked not to -- or when there is no terminal to hand over:
@@ -145,10 +143,6 @@ function logMetadata(project: Project, instance: Instance): void {
     LOG.ok(`    Instance: ${instance.name}`);
 }
 
-/**
- * Refuses unless ~/work of the existing session holds nothing the host does not
- * have, or --force says to discard it.
- */
 async function checkUnsavedWork(instance: Instance, force: boolean): Promise<void> {
     const session = await resumeSession(instance);
     await guardUnsavedWork(instance, session.sandbox, force, 'reinstall');

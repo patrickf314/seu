@@ -63,7 +63,10 @@ export async function unsavedWork(instance: Instance, sandbox: Sandbox): Promise
     const branches: string[] = [];
     for (const line of refs.trim().split('\n').filter((l) => l !== '')) {
         const [sha, branch] = line.split(' ');
-        const known = await execOnHost({ cmd: 'git', args: ['-C', instance.project.root, 'cat-file', '-e', `${sha}^{commit}`] });
+        const known = await execOnHost({
+            cmd: 'git',
+            args: ['-C', instance.project.root, 'cat-file', '-e', `${sha}^{commit}`]
+        });
         if (known.code !== 0) branches.push(branch);
     }
     return { changes, branches };
@@ -81,13 +84,28 @@ export async function guardUnsavedWork(instance: Instance, sandbox: Sandbox, for
     }
 
     if (unsaved !== undefined) {
-        if (unsaved.changes.length > 0) LOG.warn(`${unsaved.changes.length} uncommitted change(s) in ${WORK_DIR}`);
-        if (unsaved.branches.length > 0) LOG.warn(`branches with commits the host does not have: ${unsaved.branches.join(', ')}`);
+        if (unsaved.changes.length > 0) {
+            if (force) {
+                LOG.debug(`${unsaved.changes.length} uncommitted change(s) in ${WORK_DIR}`);
+            } else {
+                LOG.warn(`${unsaved.changes.length} uncommitted change(s) in ${WORK_DIR}`);
+            }
+        }
+
+        if (unsaved.branches.length > 0) {
+            if (force) {
+                LOG.debug(`branches with commits the host does not have: ${unsaved.branches.join(', ')}`);
+            } else {
+                LOG.warn(`branches with commits the host does not have: ${unsaved.branches.join(', ')}`);
+            }
+        }
     }
+
     if (force) {
-        LOG.warn('--force: discarding it');
+        LOG.ok('--force: discarding it');
         return;
     }
+
     die(
         unsaved === undefined
             ? `${WORK_DIR} could not be checked for unpulled work -- pass --force to ${what} anyway`
