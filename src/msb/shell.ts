@@ -12,13 +12,15 @@ export async function shell(config: SeuConfig, session: Session): Promise<number
 }
 
 /**
- * Like {@link shell}, but the login shell execs straight into `claude`, with
- * permission prompts off -- the VM is the boundary they would otherwise be.
- * `args` are passed on to claude as they are, never as shell syntax.
+ * Like {@link shell}, but the login shell execs straight into `claude` --
+ * unless `claude.dangerouslySkipPermissions` is off, with permission prompts
+ * off: the VM is the boundary they would otherwise be. `args` are passed on to
+ * claude as they are, never as shell syntax.
  */
 export async function claude(config: SeuConfig, session: Session, args: readonly string[]): Promise<number> {
+    const flags = config.claude.dangerouslySkipPermissions ? ['--dangerously-skip-permissions'] : [];
     return attachLoginShell(config, session, [
-        '--login', '-c', 'exec claude --dangerously-skip-permissions "$@"', 'claude', ...args,
+        '--login', '-c', 'exec claude "$@"', 'claude', ...flags, ...args,
     ]);
 }
 

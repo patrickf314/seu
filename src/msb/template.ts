@@ -249,7 +249,7 @@ async function build(project: Project, config: SeuConfig, hostM2: boolean): Prom
         LOG.ok(`removed the previous ${volumeName}`);
     }
 
-    await createVolume(volumeName, {
+    await createVolume(volumeName, config.resources.volumeSizeMiB, {
         [LABEL_IMAGE]: image,
         [LABEL_WORKTREE]: project.root,
         [LABEL_INSTALL]: JSON.stringify(installFingerprints(project, config)),
@@ -290,6 +290,7 @@ async function install(
         project,
         volume: volumeName,
         network: { policy: await buildNetworkPolicy(), strict: false },
+        resources: config.resources,
         hostRepository: hostM2,
         // Throwaway: it must not outlive this command, and the teardown below
         // is what guarantees the volume is free to be cloned afterwards.

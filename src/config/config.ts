@@ -10,6 +10,7 @@
 // are derived from the worktree itself.
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { die } from '../common/error.ts';
@@ -19,11 +20,62 @@ export const CONFIG_FILE = join('.seu', 'config.json');
 
 const DEFAULT_IMAGE = 'seu-vm-image';
 
+const DEFAULT_RESOURCES: Resources = {
+    cpus: 4,
+    memoryMiB: 10 * 1024,
+    rootDiskMiB: 20 * 1024,
+    volumeSizeMiB: 20 * 1024,
+    idleTimeoutSecs: 60 * 60,
+};
+
+/**
+ * The one place outside the project a config may name a file in: the host's
+ * own Claude Code config. Anything else of the host's stays out of reach of a
+ * repository seu does not trust.
+ */
+const HOME_CLAUDE_DIR = '~/.claude/';
+
 const ProjectPath = z
     .string()
     .refine((p) => !p.startsWith('/'), 'must be relative to the project')
     .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'')
     .refine((p) => /^(\.\/)?[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(p), 'is not a usable path');
+
+const ClaudeSettingsPath = z
+    .string()
+    .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'')
+    .refine(
+        (p) => p.startsWith(HOME_CLAUDE_DIR) || ProjectPath.safeParse(p).success,
+        `must be relative to the project, or a file in ${HOME_CLAUDE_DIR}`,
+    );
+
+const PositiveInt = z.number().int().positive();
+
+const ResourcesSchema = z
+    .object({
+        cpus: PositiveInt.optional(),
+        memoryMiB: PositiveInt.optional(),
+        rootDiskMiB: PositiveInt.optional(),
+        volumeSizeMiB: PositiveInt.optional(),
+        idleTimeoutSecs: PositiveInt.optional(),
+    })
+    .strict();
+
+const ClaudeSchema = z
+    .object({
+        /**
+         * A Claude Code settings file, copied to ~/.claude/settings.json on
+         * every `seu start`.
+         */
+        settings: ClaudeSettingsPath.optional(),
+
+        /**
+         * Whether `seu claude` starts claude with
+         * --dangerously-skip-permissions.
+         */
+        dangerouslySkipPermissions: z.boolean().optional(),
+    })
+    .strict();
 
 const ImageReference = z
     .string()
@@ -144,15 +196,49 @@ const SeuConfigSchema = z
         secrets: z.record(EnvName, SecretReference).optional(),
 
         /**
-         * A Claude Code settings file in the project, copied to
-         * ~/.claude/settings.json on every `seu start`.
+         * What every sandbox of the project gets: CPUs, memory, root disk and
+         * the size of a new volume.
          */
-        claudeSettings: ProjectPath.optional(),
+        resources: ResourcesSchema.optional(),
+
+        /**
+         * How Claude Code runs in the session.
+         */
+        claude: ClaudeSchema.optional(),
     })
     .strict();
 
 export type SeuConfigFile = z.infer<typeof SeuConfigSchema>;
 export type InstallStep = z.infer<typeof InstallStepSchema>;
+
+export interface Resources {
+    readonly cpus: number;
+    readonly memoryMiB: number;
+    readonly rootDiskMiB: number;
+
+    /**
+     * The size of a newly created volume. A clone keeps its template's size.
+     */
+    readonly volumeSizeMiB: number;
+
+    /**
+     * How long a sandbox may sit idle before microsandbox stops it.
+     */
+    readonly idleTimeoutSecs: number;
+}
+
+export interface ClaudeConfig {
+    /**
+     * Absolute path of the Claude Code settings to copy into the session, or
+     * undefined when the project names none.
+     */
+    readonly settings: string | undefined;
+
+    /**
+     * Whether `seu claude` passes --dangerously-skip-permissions.
+     */
+    readonly dangerouslySkipPermissions: boolean;
+}
 
 export interface SeuConfig {
     /**
@@ -183,11 +269,9 @@ export interface SeuConfig {
      */
     readonly secrets: Readonly<Record<string, string>>;
 
-    /**
-     * Absolute path of the Claude Code settings to copy into the session, or
-     * undefined when the project names none.
-     */
-    readonly claudeSettings: string | undefined;
+    readonly resources: Resources;
+
+    readonly claude: ClaudeConfig;
 }
 
 /**
@@ -206,9 +290,13 @@ export function loadConfig(project: Project): SeuConfig {
         install: (config.install ?? []).map(step => validateInstallStep(project, step)),
         ports: config.ports ?? [],
         secrets: config.secrets ?? {},
-        claudeSettings: config.claudeSettings === undefined
-            ? undefined
-            : projectFile(project, 'claudeSettings', config.claudeSettings),
+        resources: { ...DEFAULT_RESOURCES, ...config.resources },
+        claude: {
+            settings: config.claude?.settings === undefined
+                ? undefined
+                : claudeSettingsFile(project, config.claude.settings),
+            dangerouslySkipPermissions: config.claude?.dangerouslySkipPermissions ?? true,
+        },
     };
 }
 
@@ -258,7 +346,20 @@ function validateInstallStep(project: Project, step: InstallStep): InstallStep {
  * The absolute path of a file the config names, which has to exist.
  */
 function projectFile(project: Project, what: string, file: string): string {
-    const path = join(project.root, file.replace(/^\.\//, ''));
+    return existingFile(project, what, file, join(project.root, file.replace(/^\.\//, '')));
+}
+
+/**
+ * A settings file in the project, or one in the host's ~/.claude.
+ */
+function claudeSettingsFile(project: Project, file: string): string {
+    if (file.startsWith(HOME_CLAUDE_DIR)) {
+        return existingFile(project, 'claude.settings', file, join(homedir(), file.slice(2)));
+    }
+    return projectFile(project, 'claude.settings', file);
+}
+
+function existingFile(project: Project, what: string, file: string, path: string): string {
     if (!existsSync(path) || !statSync(path).isFile()) {
         die(`${project.configFile}: ${what}: ${file} does not exist`);
     }

@@ -86,7 +86,7 @@ export async function run(argv: string[]): Promise<number> {
             }
 
             LOG.step(`Cloning ${template.volume}`);
-            await cloneSessionVolume(instance, template);
+            await cloneSessionVolume(instance, config, template);
         } else {
             LOG.step('Volume');
             LOG.ok(`reusing the volume of ${instance.name}`);

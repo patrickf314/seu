@@ -5,11 +5,11 @@ import type { Command } from '../command.ts';
 export const CLAUDE: Command = {
     name: 'claude',
     args: '[--name <name>] [-- <claude args>]',
-    summary: 'start claude in the session, in ~/work, without permission prompts',
+    summary: 'start claude in the session, in ~/work, by default without permission prompts',
 
     details: `Like \`seu shell\`, but instead of bash you land directly in \`claude\`, as \`seu\`, in ~/work. Everything \`seu shell\` says about the sandbox, dockerd and ~/work holds here too.
 
-claude runs with --dangerously-skip-permissions. The microVM is the isolation boundary: /src is mounted read-only, egress is restricted to Anthropic, and the only way work leaves is \`seu pull\` on the host. Prompting for every command inside it adds friction, not safety.
+claude runs with --dangerously-skip-permissions, unless \`claude.dangerouslySkipPermissions\` in .seu/config.json is false. The microVM is the isolation boundary: /src is mounted read-only, egress is restricted to Anthropic, and the only way work leaves is \`seu pull\` on the host. Prompting for every command inside it adds friction, not safety.
 
 Anything after \`--\` is passed to claude as it is, e.g. \`seu claude -- --continue\`.
 

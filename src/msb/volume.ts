@@ -6,8 +6,6 @@ import { dirname, join } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
 import { execOnHost } from '../host/exec.ts';
 
-export const VOLUME_SIZE_MIB = 20 * 1024;
-
 async function volumeHandle(name: string): Promise<VolumeHandle | undefined> {
     const { Volume } = await sdk();
     return (await Volume.list()).find((v) => v.name === name);
@@ -26,14 +24,13 @@ export async function volumeLabels(name: string): Promise<Record<string, string>
 }
 
 /**
- * A fresh disk volume of the standard size.
- * Fails if the name is taken.
+ * A fresh disk volume. Fails if the name is taken.
  */
-export async function createVolume(name: string, labels: Record<string, string> = {}): Promise<Volume> {
+export async function createVolume(name: string, sizeMiB: number, labels: Record<string, string> = {}): Promise<Volume> {
     const { Volume } = await sdk();
     const builder = Volume.builder(name)
         .disk()
-        .size(VOLUME_SIZE_MIB);
+        .size(sizeMiB);
 
     for (const [key, value] of Object.entries(labels)) {
         builder.label(key, value);
@@ -45,8 +42,8 @@ export async function createVolume(name: string, labels: Record<string, string> 
 /**
  * Make `target` a copy of `source`, which must exist and must not be mounted.
  */
-export async function cloneVolume(source: string, target: string, labels: Record<string, string> = {}): Promise<Volume> {
-    const targetVolume = await createVolume(target, labels);
+export async function cloneVolume(source: string, target: string, sizeMiB: number, labels: Record<string, string> = {}): Promise<Volume> {
+    const targetVolume = await createVolume(target, sizeMiB, labels);
     const from = join(dirname(targetVolume.path), source, 'disk.raw');
     const to = join(targetVolume.path, 'disk.raw');
     if (!existsSync(from)) {

@@ -1,9 +1,9 @@
 // The project's Claude Code settings, carried into the session.
 //
-// `claudeSettings` in .seu/config.json names a settings file in the project. It
-// is copied to ~/.claude/settings.json on every `seu start`, so an edit reaches
-// the session without rebuilding the template. Without one the
-// session runs on Claude Code's defaults.
+// `claude.settings` in .seu/config.json names a settings file in the project or
+// in the host's ~/.claude. It is copied to ~/.claude/settings.json on every
+// `seu start`, so an edit reaches the session without rebuilding the template.
+// Without one the session runs on Claude Code's defaults.
 
 import type { Sandbox } from 'microsandbox';
 import { readFileSync } from 'node:fs';
@@ -17,8 +17,9 @@ const SETTINGS_PATH = '$CLAUDE_CONFIG_DIR/settings.json';
  * Copy the configured settings into the sandbox; nothing when there are none.
  */
 export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig): Promise<void> {
-    if (config.claudeSettings === undefined) {
-        LOG.debug('no claudeSettings configured');
+    const settings = config.claude.settings;
+    if (settings === undefined) {
+        LOG.debug('no claude.settings configured');
         return;
     }
 
@@ -30,12 +31,12 @@ export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig)
             '-lc',
             `mkdir -p "$CLAUDE_CONFIG_DIR" && printf '%s' "$SEU_CLAUDE_SETTINGS" > "${SETTINGS_PATH}"`,
         ],
-        env: { SEU_CLAUDE_SETTINGS: readFileSync(config.claudeSettings, 'utf8') },
+        env: { SEU_CLAUDE_SETTINGS: readFileSync(settings, 'utf8') },
         timeoutMs: 60_000,
     });
     if (result.ok) {
-        LOG.ok(`${config.claudeSettings} -> ~/.claude/settings.json`);
+        LOG.ok(`${settings} -> ~/.claude/settings.json`);
     } else {
-        LOG.warn(`could not copy ${config.claudeSettings} to ~/.claude/settings.json`);
+        LOG.warn(`could not copy ${settings} to ~/.claude/settings.json`);
     }
 }

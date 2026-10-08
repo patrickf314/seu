@@ -130,10 +130,10 @@ export async function sessionExists(instance: Instance): Promise<boolean> {
 /**
  * The SEU's volume as a clone of the template's.
  */
-export async function cloneSessionVolume(instance: Instance, template: Template): Promise<void> {
+export async function cloneSessionVolume(instance: Instance, config: SeuConfig, template: Template): Promise<void> {
     const volume = sessionVolumeName(instance);
     const started = Date.now();
-    await cloneVolume(template.volume, volume);
+    await cloneVolume(template.volume, volume, config.resources.volumeSizeMiB);
     LOG.ok(`${volume} (${Date.now() - started} ms)`);
 }
 
@@ -150,6 +150,7 @@ export async function createSession(instance: Instance, config: SeuConfig): Prom
         project: instance.project,
         volume: sessionVolumeName(instance),
         network: { policy: await sessionNetworkPolicy(), strict: true },
+        resources: config.resources,
         detached: true,
     });
 

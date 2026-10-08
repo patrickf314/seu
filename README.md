@@ -159,7 +159,13 @@ Every key is optional, and so is the file:
 | `image` | `seu-vm-image` | the microsandbox image every sandbox of the project runs on. It must already be in msb's image store; seu never builds or loads it. |
 | `install` | nothing | the steps `seu start` runs into the template volume, in order, while it still has egress. See below and `seu help start`. |
 | `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
-| `claudeSettings` | nothing | a Claude Code settings file in the project, e.g. `".seu/claude-settings.json"`. Copied to `~/.claude/settings.json` in the session on every `seu start`; without it the session runs on Claude Code's defaults. A path that does not exist is an error. |
+| `claude.settings` | nothing | a Claude Code settings file in the project, e.g. `".seu/claude-settings.json"`, or in your own `~/.claude`, e.g. `"~/.claude/settings.json"`. Copied to `~/.claude/settings.json` in the session on every `seu start`; without it the session runs on Claude Code's defaults. A path that does not exist is an error. No other host path is allowed. |
+| `claude.dangerouslySkipPermissions` | `true` | whether `seu claude` starts claude with `--dangerously-skip-permissions`. |
+| `resources.cpus` | `4` | CPUs of every sandbox of the project. |
+| `resources.memoryMiB` | `10240` | memory of every sandbox, in MiB. |
+| `resources.rootDiskMiB` | `20480` | root disk of every sandbox, in MiB. |
+| `resources.volumeSizeMiB` | `20480` | size of a newly created volume, in MiB. A SEU cloned from the template keeps the template's size, so a change only takes effect with `seu start --reinstall`. |
+| `resources.idleTimeoutSecs` | `3600` | how long a sandbox may sit idle before microsandbox stops it. |
 | `secrets` | nothing | env vars for the session shell, as 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a

@@ -8,19 +8,12 @@ import { sleep } from '../common/utils.ts';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
 import type { Project } from '../config/project.ts';
+import type { Resources } from '../config/config.ts';
 import { execInSandbox } from './exec.ts';
-import { VOLUME_SIZE_MIB } from './volume.ts';
 import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 
 type NetworkBuilder = InstanceType<typeof import('microsandbox').NetworkBuilder>;
 type TlsBuilder = InstanceType<typeof import('microsandbox').TlsBuilder>;
-
-export const RESOURCES = {
-    cpus: 4,
-    memoryMiB: 10 * 1024,
-    rootDiskMiB: 20 * 1024,
-    idleTimeoutSecs: 60 * 60,
-};
 
 /**
  * Egress for one sandbox. Fixed at creation -- microsandbox has no way to
@@ -50,6 +43,7 @@ export interface SandboxSpec {
     /** The named disk volume mounted at /seu. Created if it does not exist. */
     readonly volume: string;
     readonly network: NetworkSpec;
+    readonly resources: Resources;
     /**
      * The developer's own ~/.m2/repository, mounted read-only at /host-m2 as a
      * resolution source. Install sandbox only; undefined for the session, which must not depend on a
@@ -68,17 +62,17 @@ export interface SandboxSpec {
  */
 export async function createSandbox(spec: SandboxSpec): Promise<Sandbox> {
     const { Sandbox } = await sdk();
-    const { project } = spec;
+    const { project, resources } = spec;
 
     const builder = Sandbox.builder(spec.name)
         .image(spec.image)
         .pullPolicy('never')
         .replace()
         .detached(spec.detached)
-        .cpus(RESOURCES.cpus)
-        .memory(RESOURCES.memoryMiB)
-        .rootDisk(RESOURCES.rootDiskMiB)
-        .idleTimeout(RESOURCES.idleTimeoutSecs)
+        .cpus(resources.cpus)
+        .memory(resources.memoryMiB)
+        .rootDisk(resources.rootDiskMiB)
+        .idleTimeout(resources.idleTimeoutSecs)
         .user('seu')
         .shell('/bin/bash')
         .network((n: NetworkBuilder) => {
@@ -88,7 +82,7 @@ export async function createSandbox(spec: SandboxSpec): Promise<Sandbox> {
             }
             return n;
         })
-        .volume(VOLUME_MOUNT, (m) => m.namedWith(spec.volume, 'ensure-exists', 'disk', VOLUME_SIZE_MIB))
+        .volume(VOLUME_MOUNT, (m) => m.namedWith(spec.volume, 'ensure-exists', 'disk', resources.volumeSizeMiB))
         .volume(SRC_MOUNT, (m) => m.bind(project.root).readonly());
 
     const gitDir = project.gitDir;
