@@ -16,6 +16,7 @@ import {
     destroySandbox,
     prepareWork,
     removeSandbox,
+    startDockerd,
 } from './sandbox.ts';
 import { SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 import { execInSandbox } from './exec.ts';
@@ -326,6 +327,13 @@ async function install(
 
         if (hostM2 !== undefined) await declareHostRepository(sandbox);
 
+        // dockerd is the slow part of the boot, so only a profile that needs
+        // it gets it.
+        if (needsDocker(steps)) {
+            LOG.info('starting dockerd in the install sandbox');
+            dockerd = await startDockerd(sandbox);
+        }
+
         if (steps.length === 0) {
             LOG.debug('no install steps');
         } else {
@@ -380,6 +388,14 @@ function keepLogs(sandboxName: string): void {
  * of them; but they are settled before a mise or script step, which would
  * otherwise spend its time on a template that is already broken.
  */
+function needsDocker(steps: readonly InstallStep[]): boolean {
+    // A script gets it unconditionally, because a build command is opaque to
+    // us, and the ones that want Docker (Testcontainers, buildpacks, a compose
+    // file started by a test) fail in ways that point anywhere but at a
+    // missing daemon.
+    return steps.some(s => s.type === 'docker' || s.type === 'docker-compose' || s.type === 'script');
+}
+
 async function runInstall(sandbox: Sandbox, steps: readonly InstallStep[]): Promise<void> {
     // Across the whole run, not per step: two compose files naming the same
     // postgres is the normal case, and the second pull is pure wall-clock.

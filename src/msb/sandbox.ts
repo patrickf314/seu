@@ -2,7 +2,7 @@
 // execs, and dockerd. Port of the sandbox half of lib/common.sh, on top of the
 // microsandbox SDK instead of the `msb` CLI.
 
-import type { NetworkPolicyBuilder, Sandbox, SandboxHandle, SandboxStatus } from 'microsandbox';
+import type { ExecHandle, NetworkPolicyBuilder, Sandbox, SandboxHandle, SandboxStatus } from 'microsandbox';
 import { sdk } from './sdk.ts';
 import { sleep } from '../common/utils.ts';
 import { LOG } from '../common/log.ts';
@@ -258,4 +258,63 @@ export async function sandboxReady(sandbox: Sandbox): Promise<void> {
         await sleep(1000);
     }
     die(`${sandbox.name}: the guest agent never became ready`);
+}
+
+/**
+ * Start dockerd in the foreground of a streaming exec (see vm/dockerd-run.sh)
+ * and wait until it answers. The returned handle IS the daemon's supervisor:
+ * kill it and dockerd goes with it. Undefined when one is already running.
+ *
+ * dockerd occasionally loses its own startup race on a cold VM, hence the
+ * retries.
+ */
+export async function startDockerd(sandbox: Sandbox): Promise<ExecHandle | undefined> {
+    if (await dockerdRunning(sandbox)) {
+        LOG.debug('dockerd already running');
+        return undefined;
+    }
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const handle = await sandbox.execStreamWith('/usr/local/bin/dockerd-run.sh', b => b.user('root'));
+        // Drain the stream so the guest is never blocked on a full pipe; the log
+        // itself lives in /var/log/dockerd.log inside the VM.
+        void (async () => {
+            try {
+                for await (const _event of handle) void _event;
+            } catch {
+                /* the handle was killed at teardown */
+            }
+        })();
+
+        for (let i = 0; i < 30; i++) {
+            if (await dockerdRunning(sandbox)) {
+                LOG.ok('dockerd ready');
+                return handle;
+            }
+            await sleep(2000);
+        }
+
+        await handle.kill().catch(() => {});
+        if (attempt < 3) LOG.warn(`dockerd did not come up (attempt ${attempt}/3); retrying`);
+    }
+
+    LOG.warn('dockerd failed to start after 3 attempts');
+    const log = await execInSandbox(sandbox, {
+        cmd: 'sh',
+        args: ['-c', 'tail -20 /var/log/dockerd.log'],
+        root: true,
+        timeoutMs: 20_000,
+    });
+    for (const line of log.stdout.trim().split('\n')) LOG.warn(`    ${line}`);
+    return die('dockerd failed to start');
+}
+
+async function dockerdRunning(sandbox: Sandbox): Promise<boolean> {
+    const probe = await execInSandbox(sandbox, {
+        cmd: 'sh',
+        args: ['-c', 'docker info >/dev/null 2>&1'],
+        root: true,
+        timeoutMs: 20_000,
+    });
+    return probe.ok;
 }
