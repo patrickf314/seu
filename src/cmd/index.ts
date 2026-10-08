@@ -1,6 +1,7 @@
 // The command set. One entry per command; `cli.ts` dispatches from here and
 // `help/run.ts` documents from here, so neither can drift from the other.
 
+import { CLAUDE } from './claude/index.ts';
 import { HELP } from './help/index.ts';
 import { LIST } from './list/index.ts';
 import { PLAYWRIGHT } from './playwright/index.ts';
@@ -22,6 +23,7 @@ export const COMMANDS: readonly Command[] = [
     REMOVE,
     LIST,
     SHELL,
+    CLAUDE,
     PULL,
     PORT,
     PLAYWRIGHT,
