@@ -63,21 +63,52 @@ RUN curl -fsSL https://mise.run | MISE_VERSION=${MISE_VERSION} MISE_INSTALL_PATH
 # --- Mise (end) ---
 
 # --- User ---
+# Everything of seu's lives in its home, and only the home is persisted: the
+# SEU's named volume is mounted over /home/seu. /src is the host worktree
+# (read-only), ~/work the git clone of it, ~/.m2, ~/.cache and ~/.local/share
+# the caches, ~/.local/share/docker the pulled images.
+#
+# The volume mounts EMPTY and root-owned the first time, hiding whatever the
+# image has at /home/seu. So the home is prepared here and kept as a skeleton in
+# /opt/seu/home-skel, which seu-home-init copies into a fresh volume. The
+# directories are created up front, owned by seu: dockerd (root) creates its
+# data root with `mkdir -p`, and a root-owned ~/.local/share would lock mise out.
 RUN useradd --create-home --shell /bin/bash seu \
  && usermod -aG docker seu \
- && mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /seu/mise /home/seu/.claude \
- && ln -s /seu/work  /work \
- && ln -s /seu/m2    /home/seu/.m2 \
- && ln -s /seu/cache /home/seu/.cache \
- && chown -R seu:seu /home/seu /seu \
- && chown -h seu:seu /work /home/seu/.m2 /home/seu/.cache
+ && mkdir -p /home/seu/work /home/seu/.m2 /home/seu/.cache /home/seu/.config /home/seu/.local/share /home/seu/.claude
+COPY claude-settings.json /home/seu/.claude/settings.json
+RUN chown -R seu:seu /home/seu \
+ && mkdir -p /opt/seu \
+ && cp -a /home/seu /opt/seu/home-skel
 # --- User (end) ---
 
+# --- Docker storage ---
+# Pulled images in the home volume, so they survive a restart and are part of
+# the template every SEU is cloned from. In daemon.json rather than a dockerd
+# flag, so any dockerd started in this image uses it.
+RUN mkdir -p /etc/docker \
+ && printf '{\n  "data-root": "/home/seu/.local/share/docker"\n}\n' > /etc/docker/daemon.json
+# --- Docker storage (end) ---
+
+# --- Scripts ---
+COPY seu-home-init.sh dockerd-run.sh session-init.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/seu-home-init.sh /usr/local/bin/dockerd-run.sh /usr/local/bin/session-init.sh
+# --- Scripts (end) ---
+
 # --- Environment variables ---
-ENV DISABLE_AUTOUPDATER=1 \
+# mise's data, config and cache in the home, explicitly: `seu start` writes the
+# project's mise.toml to $MISE_CONFIG_DIR. The shims on PATH rather than
+# `mise activate`, because an exec from the host is not an interactive shell.
+# A login shell's /etc/profile may reset PATH, so profile.d repeats it.
+ENV MISE_DATA_DIR=/home/seu/.local/share/mise \
+    MISE_CONFIG_DIR=/home/seu/.config/mise \
+    MISE_CACHE_DIR=/home/seu/.cache/mise \
+    PATH=/home/seu/.local/share/mise/shims:$PATH \
+    DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
     LANG=en_US.UTF-8
+RUN printf 'PATH="/home/seu/.local/share/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
 # --- Environment variables (end) ---
 
 USER seu

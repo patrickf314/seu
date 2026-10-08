@@ -1,4 +1,4 @@
-// /work: the SEU's writable clone of the worktree, and the only place in a SEU
+// ~/work: the SEU's writable clone of the worktree, and the only place in a SEU
 // where work can exist that exists nowhere else.
 
 import type { Sandbox } from 'microsandbox';
@@ -23,23 +23,34 @@ export interface UnsavedWork {
 }
 
 /**
- * What would be lost with this SEU's volume: uncommitted changes in /work, and
+ * What would be lost with this SEU's volume: uncommitted changes in ~/work, and
  * branches whose tip the host repository does not have.
  *
  * "Does the host have the commit" rather than "is it merged": a `seu pull`
  * fetches into the remote `seu-<name>`, and fetched is enough -- the commits are
  * safe on the host whether or not they have been merged yet.
  *
- * Undefined when /work could not be inspected at all, which callers must treat
+ * A missing or empty ~/work -- a session whose clone never happened -- holds
+ * nothing, so it is nothing rather than unknown.
+ *
+ * Undefined when ~/work could not be inspected at all, which callers must treat
  * as "unknown", not as "nothing".
  */
 export async function unsavedWork(instance: Instance, sandbox: Sandbox): Promise<UnsavedWork | undefined> {
     const state = await execInSandbox(sandbox, {
         cmd: 'bash',
-        args: ['-c', 'git status --porcelain && echo "--refs--" && git for-each-ref refs/heads --format="%(objectname) %(refname:short)"'],
-        cwd: WORK_DIR,
+        args: [
+            '-c',
+            `cd ${WORK_DIR} 2>/dev/null && [ -n "$(ls -A)" ] || { echo "--empty--"; exit 0; }
+             git status --porcelain && echo "--refs--" && git for-each-ref refs/heads --format="%(objectname) %(refname:short)"`,
+        ],
         timeoutMs: 60_000,
     });
+
+    if (state.ok && state.stdout.trim() === '--empty--') {
+        LOG.debug(`${WORK_DIR} is empty`);
+        return { changes: [], branches: [] };
+    }
 
     if (!state.ok) {
         LOG.warn(`could not inspect ${WORK_DIR}: ${(state.stderr || state.stdout).trim().split('\n').pop() ?? ''}`);
@@ -59,7 +70,7 @@ export async function unsavedWork(instance: Instance, sandbox: Sandbox): Promise
 }
 
 /**
- * Refuse to go on when /work holds work the host does not have, unless forced.
+ * Refuse to go on when ~/work holds work the host does not have, unless forced.
  * `what` names the action, for the message.
  */
 export async function guardUnsavedWork(instance: Instance, sandbox: Sandbox, force: boolean, what: string): Promise<void> {
@@ -85,9 +96,9 @@ export async function guardUnsavedWork(instance: Instance, sandbox: Sandbox, for
 }
 
 /**
- * Move a /work that came from a template onto this worktree's state.
+ * Move a ~/work that came from a template onto this worktree's state.
  *
- * The template's /work is a clone of whichever worktree built the template, at
+ * The template's ~/work is a clone of whichever worktree built the template, at
  * the commit it had then -- plus everything its install produced: `target/`,
  * `node_modules`, generated sources. Those are the point of reusing it, and
  * they are all git-ignored, so the move is done with git rather than by

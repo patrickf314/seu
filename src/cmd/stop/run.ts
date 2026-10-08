@@ -37,7 +37,7 @@ export async function run(argv: string[]): Promise<void> {
         LOG.ok(`dropped forward ${f.bind}:${f.host} -> vm:${f.guest}`);
     }
 
-    LOG.info(`/work and every cache are kept in the volume -- \`${seuCommand(instance, 'start')}\` resumes it`);
+    LOG.info(`~/work and every cache are kept in the volume -- \`${seuCommand(instance, 'start')}\` resumes it`);
 }
 
 function logMetadata(project: Project, instance: Instance): void {

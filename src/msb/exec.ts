@@ -1,4 +1,4 @@
-import type { Sandbox } from 'microsandbox';
+import type { ExecEvent, Sandbox } from 'microsandbox';
 import { LOG } from '../common/log.ts';
 import { OutputCollector, type ExecRequest, type ExecResult } from '../common/exec.ts';
 
@@ -35,9 +35,15 @@ export async function execInSandbox(sandbox: Sandbox, req: ExecRequest): Promise
     const stdout = new OutputCollector(req.stream);
     const stderr = new OutputCollector(req.stream);
     let code = -1;
+    let spawnFailed = false;
     try {
-        for await (const event of handle) {
-            if (event.kind === 'stdout') {
+        // `| undefined`: a command that cannot be started at all -- a missing
+        // binary, say -- arrives as a `failed` event, which the SDK (0.7.7)
+        // does not know and passes on as undefined.
+        for await (const event of handle as AsyncIterable<ExecEvent | undefined>) {
+            if (event === undefined) {
+                spawnFailed = true;
+            } else if (event.kind === 'stdout') {
                 stdout.push(event.data);
             } else if (event.kind === 'stderr') {
                 stderr.push(event.data);
@@ -47,6 +53,11 @@ export async function execInSandbox(sandbox: Sandbox, req: ExecRequest): Promise
         }
     } finally {
         clearTimeout(watchdog);
+    }
+
+    if (spawnFailed) {
+        // Shell convention for a command that could not be run.
+        return { ok: false, code: 127, stdout: '', stderr: `could not start ${req.cmd} in the sandbox`, timedOut };
     }
 
     return { ok: !timedOut && code === 0, code, stdout: stdout.finish(), stderr: stderr.finish(), timedOut };

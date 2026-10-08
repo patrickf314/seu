@@ -9,7 +9,7 @@ export const START: Command = {
 
     details: `Brings this worktree to a shell in a running session, doing only what is still missing.
 
-A worktree can have several SEUs side by side. Each is named -- by default after the worktree's directory -- and has its own session sandbox, its own named volume (and with it its own /work clone, ~/.m2 and Docker images) and its own port forwards. \`seu start --name review\` next to \`seu start\` gives you a second, independent sandbox of the same checkout.
+A worktree can have several SEUs side by side. Each is named -- by default after the worktree's directory -- and has its own session sandbox, its own named volume (and with it its own ~/work clone, ~/.m2 and Docker images) and its own port forwards. \`seu start --name review\` next to \`seu start\` gives you a second, independent sandbox of the same checkout.
 
 What happens depends on what is already there:
 
@@ -17,7 +17,7 @@ What happens depends on what is already there:
   volume exists     a new session over it (after \`seu remove --keep-volume\`)
   neither           the SEU is created from the project's TEMPLATE
 
-The template is a volume that has been installed once -- the \`install\` steps run -- and every new SEU of the project starts as a copy of it. The copy is an APFS clone of the volume's disk image: it takes milliseconds and no disk space until the two diverge. So installing, the slow part, happens once per project rather than once per SEU. The template is named after the worktree's directory. The new SEU's /work is then moved onto this worktree -- its branch, its commit, its uncommitted changes -- keeping the template's build outputs (target/, node_modules), so the first build is incremental.
+The template is a volume that has been installed once -- the \`install\` steps run -- and every new SEU of the project starts as a copy of it. The copy is an APFS clone of the volume's disk image: it takes milliseconds and no disk space until the two diverge. So installing, the slow part, happens once per project rather than once per SEU. The template is named after the worktree's directory. The new SEU's ~/work is then moved onto this worktree -- its branch, its commit, its uncommitted changes -- keeping the template's build outputs (target/, node_modules), so the first build is incremental.
 
 There is no template yet the first time; \`seu start\` builds it then:
 
@@ -27,7 +27,7 @@ There is no template yet the first time; \`seu start\` builds it then:
 
 The SEU itself never installs: its session only ever has egress to Anthropic. microsandbox fixes a network policy at creation, which is why the install has a sandbox -- and now a volume -- of its own.
 
---reinstall rebuilds the template from this worktree, and recreates this SEU from the new template. That is how a changed image, mise.toml or install step -- or a new dependency -- gets in. It replaces the SEU's volume, so it first checks /work for work the host does not have (uncommitted changes, commits never \`seu pull\`ed) and refuses if there is any, unless --force. Other SEUs keep their volumes; they are independent copies.
+--reinstall rebuilds the template from this worktree, and recreates this SEU from the new template. That is how a changed image, mise.toml or install step -- or a new dependency -- gets in. It replaces the SEU's volume, so it first checks ~/work for work the host does not have (uncommitted changes, commits never \`seu pull\`ed) and refuses if there is any, unless --force. Other SEUs keep their volumes; they are independent copies.
 
 The command ends in the SEU's shell, like \`seu shell\`. Leaving the shell leaves the session running. --detach, or running without a terminal, stops before that.
 
@@ -46,7 +46,7 @@ An install step is one of:
       resolve one artifact and its dependencies into ~/.m2
 
   { "type": "script", "script": "mvn clean install -DskipTests -T1C" }
-      run a shell command as \`seu\` in /work
+      run a shell command as \`seu\` in ~/work
 
 Unlike everything else in the profile, a script step is a shell command by design. It only ever runs inside the guest, in a sandbox that is thrown away afterwards.
 
@@ -55,7 +55,7 @@ Your own ~/.m2/repository is mounted read-only at /host-m2 in the install sandbo
     options: [
         { flag: '--name, -n <name>', text: 'the SEU to start; default: the worktree\'s directory name' },
         { flag: '--reinstall', text: 'rebuild the template, and recreate this SEU from it' },
-        { flag: '--force', text: 'with --reinstall: discard work in /work that the host does not have' },
+        { flag: '--force', text: 'with --reinstall: discard work in ~/work that the host does not have' },
         { flag: '--detach, -d', text: 'start the session but do not open a shell in it' },
         { flag: '--no-host-m2', text: 'do not mount the host ~/.m2/repository when building the template' },
     ],

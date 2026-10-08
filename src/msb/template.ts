@@ -323,7 +323,7 @@ async function install(
     try {
         if (hostM2 !== undefined) await declareHostRepository(sandbox);
 
-        // Always: the template's /work is what every SEU's /work starts from.
+        // Always: the template's ~/work is what every SEU's ~/work starts from.
         LOG.info(`preparing ${WORK_DIR}`);
         await prepareWork(sandbox);
 
@@ -565,7 +565,7 @@ function warnOnRootWork(script: string): void {
     if (needsRoot === null) return;
 
     LOG.warn(`the install script contains \`${needsRoot[0]}\`, which wants root`);
-    LOG.warn('    this runs as `seu`, and anything outside /seu dies with this sandbox');
+    LOG.warn('    this runs as `seu`, and anything outside the home dies with this sandbox');
     LOG.warn('    system packages belong in the image (`image` in .seu/config.json)');
 }
 
@@ -589,8 +589,8 @@ function report(output: string): void {
 
 /**
  * Write the project's mise.toml as mise's global config in the volume, then
- * install it. Global rather than the copy in /work: it has to apply wherever a
- * shim is called from, and /work moves on to other branches.
+ * install it. Global rather than the copy in ~/work: it has to apply wherever a
+ * shim is called from, and ~/work moves on to other branches.
  */
 async function installToolchain(sandbox: Sandbox, mise: string): Promise<void> {
     LOG.info('installing the toolchain (mise)');
@@ -607,7 +607,7 @@ async function installToolchain(sandbox: Sandbox, mise: string): Promise<void> {
              mise install
              mise reshim`,
         ],
-        // Away from /work, so only the global config is in play.
+        // Away from ~/work, so only the global config is in play.
         cwd: VOLUME_MOUNT,
         env: { SEU_MISE_TOML: readFileSync(mise, 'utf8') },
         timeoutMs: MISE_TIMEOUT_MS,

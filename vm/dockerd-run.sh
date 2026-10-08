@@ -17,18 +17,15 @@ set -eu
 mkdir -p /var/log /var/run
 mountpoint -q /sys/fs/cgroup || mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
 
-# Bootstrap the single named volume. /work, ~/.m2 and ~/.cache are symlinks into
-# /seu (see vm/Dockerfile); they dangle until these directories exist. This runs
-# as root before anything else touches the volume, so it is the natural place.
-mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker
-chown seu:seu /seu /seu/work /seu/m2 /seu/cache
+# The data root is in the home volume (/etc/docker/daemon.json), which has to be
+# set up before dockerd creates anything in it.
+/usr/local/bin/seu-home-init.sh
 
 # overlay2 on the ext4 named volume is the verified-good combination. The
 # fallbacks exist for a kernel or volume that cannot support it.
 DRIVER="${SEU_DOCKER_STORAGE_DRIVER:-overlay2}"
 
 exec dockerd \
-  --data-root /seu/docker \
   --storage-driver "$DRIVER" \
   --host unix:///var/run/docker.sock \
   --iptables=true \

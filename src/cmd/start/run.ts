@@ -31,7 +31,6 @@ import { clearSession, resumeSession, type Session, sessionSandboxName, sessionS
 import { guardUnsavedWork, syncWorkToSource } from '../../common/work.ts';
 import { stopAllForwards } from '../../network/forward.ts';
 import {
-    bootstrapVolume,
     createSandbox,
     installSandboxName,
     prepareWork,
@@ -167,7 +166,7 @@ async function discardSeu(instance: Instance): Promise<void> {
  * everything in the volume; it only has to be running again.
  *
  * `prepareWork` still runs after a resume: it is idempotent, and it is what
- * repairs a session whose first start was interrupted before /work was cloned.
+ * repairs a session whose first start was interrupted before ~/work was cloned.
  */
 async function resume(instance: Instance, status: SandboxStatus): Promise<Session> {
     if (status === 'running') {
@@ -185,7 +184,7 @@ async function resume(instance: Instance, status: SandboxStatus): Promise<Sessio
  * lifetime of its own -- it is detached, so it stays up when this command
  * returns.
  *
- * `fromTemplate`: the volume is a fresh clone, whose /work still sits on the
+ * `fromTemplate`: the volume is a fresh clone, whose ~/work still sits on the
  * worktree and commit the template was installed from.
  */
 async function startSession(image: string, instance: Instance, fromTemplate: boolean): Promise<Session> {
@@ -201,7 +200,6 @@ async function startSession(image: string, instance: Instance, fromTemplate: boo
     });
 
     await sandboxReady(sandbox);
-    await bootstrapVolume(sandbox);
 
     LOG.step(`Preparing ${WORK_DIR}`);
     await prepareWork(sandbox);

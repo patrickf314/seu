@@ -64,7 +64,7 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 /**
- * A path inside /work. It is interpolated into a command that runs in the VM,
+ * A path inside ~/work. It is interpolated into a command that runs in the VM,
  * so it is held to an explicit character class -- the same one the profile's
  * own paths are -- rather than quoted and hoped for.
  */

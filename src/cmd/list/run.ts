@@ -75,7 +75,7 @@ export async function run(argv: string[]): Promise<void> {
 
 /**
  * The project templates new SEUs are cloned from. Not SEUs -- no session, no
- * /work anyone works in -- but disk that is worth knowing about.
+ * ~/work anyone works in -- but disk that is worth knowing about.
  */
 async function printTemplates(): Promise<void> {
     const templates = (await listTemplates()).map((t) => [t.volume, t.image ?? '?', t.worktree ?? '?']);

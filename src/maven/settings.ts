@@ -9,7 +9,7 @@
 // developer's repository is tens of gigabytes against a 20 GiB volume, and
 // virtiofs is slow enough that a bulk copy would lose to a plain download. As a
 // `file://` remote, Maven takes exactly the artifacts this project asks for and
-// copies them into /seu/m2, so the session stays self-contained with no host
+// copies them into ~/.m2, so the session stays self-contained with no host
 // mount. Anything /host-m2 cannot serve falls through to the real remotes.
 //
 // It also removes the reason credentials were ever needed in here: an artifact
@@ -99,7 +99,7 @@ export async function sealForOffline(sandbox: Sandbox): Promise<void> {
         cmd: 'bash',
         args: [
             '-lc',
-            `find /seu/m2 -type f \\( -name _remote.repositories \\
+            `find ~/.m2 -type f \\( -name _remote.repositories \\
                                    -o -name '*.lastUpdated' \\
                                    -o -name resolver-status.properties \\
                                    -o -name '*.part' -o -name '*.part.lock' \\) -delete 2>/dev/null

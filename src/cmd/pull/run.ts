@@ -1,4 +1,4 @@
-// The `seu pull` flow: /work's commits, out over a file and into a git remote.
+// The `seu pull` flow: ~/work's commits, out over a file and into a git remote.
 //
 // Kept apart from the command const in src/cmd/pull.ts so that loading the
 // command set does not load the microsandbox SDK.

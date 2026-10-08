@@ -12,7 +12,7 @@ export const PLAYWRIGHT: Command = {
 
   seu playwright club/club-ui/club-ui-test/target/trace.zip
 
-<trace> is relative to /work; a leading /work/ is accepted too.
+<trace> is relative to ~/work; a leading /home/seu/work/ is accepted too.
 
 The viewer ships inside the Playwright Java client, so it is started with \`mvn -o exec:java\` through the module whose pom puts that client on the classpath. By default that is the nearest pom.xml above the trace -- the test module whose target/ it was written to. If that guess is wrong, pass --pom. Offline, because the session has no network: the exec plugin and Playwright have to be in ~/.m2 already, which an install \`script\` step that builds that module takes care of.
 

@@ -9,7 +9,7 @@ import { execOnHost } from '../host/exec.ts';
 export const VOLUME_SIZE_MIB = 20 * 1024;
 
 /**
- * The named volume of one SEU instance: /work, ~/.m2, ~/.cache, Docker images.
+ * The named volume of one SEU instance: ~/work, ~/.m2, ~/.cache, Docker images.
  */
 export const volumeName = (instanceName: string): string => `seu-${instanceName}-data`;
 

@@ -49,7 +49,7 @@ export async function run(argv: string[]): Promise<void> {
     LOG.step(`Removing SEU ${instance.name}`);
     if (sessionStatus !== 'absent') LOG.info(`sandbox ${session} (${sessionStatus})`);
     if (installStatus !== 'absent') LOG.info(`sandbox ${install} (${installStatus})`);
-    if (hasVolume) LOG.info(`volume  ${volumeName(instance.name)} -- /work, ~/.m2, ~/.cache, Docker images`);
+    if (hasVolume) LOG.info(`volume  ${volumeName(instance.name)} -- ~/work, ~/.m2, ~/.cache, Docker images`);
     if (opts.keepVolume) LOG.info('the volume is kept (--keep-volume)');
 
     // The volume is where unpulled work lives; with it kept, nothing is lost.

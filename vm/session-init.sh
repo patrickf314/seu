@@ -1,10 +1,12 @@
 #!/bin/bash
-# Prepare /work inside the VM. Runs as the `seu` user, idempotent.
+# Prepare ~/work inside the VM. Runs as the `seu` user, idempotent.
 #
-# /src is the host worktree, mounted READ-ONLY. We never write there. /work is a
-# clone of it living in the `work` named volume, which persists across sandbox
-# stop/start and across the build-sandbox -> session-sandbox handoff.
+# /src is the host worktree, mounted READ-ONLY. We never write there. ~/work is a
+# clone of it in the home volume, which persists across sandbox stop/start and
+# across the install-sandbox -> session-sandbox handoff.
 set -uo pipefail
+
+WORK=/home/seu/work
 
 c_ylw=$'\033[33m'; c_red=$'\033[31m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
 
@@ -18,12 +20,12 @@ if [[ -z "$(git config --global user.email 2>/dev/null)" ]]; then
 fi
 
 if [[ ! -d /src ]]; then
-  echo "${c_ylw}warn${c_off} /src is not mounted; /work will be empty" >&2
+  echo "${c_ylw}warn${c_off} /src is not mounted; $WORK will be empty" >&2
   exit 0
 fi
 
-if [[ -n "$(ls -A /work 2>/dev/null)" ]]; then
-  echo "${c_dim}/work already populated; leaving it alone${c_off}" >&2
+if [[ -n "$(ls -A "$WORK" 2>/dev/null)" ]]; then
+  echo "${c_dim}$WORK already populated; leaving it alone${c_off}" >&2
   exit 0
 fi
 
@@ -42,13 +44,13 @@ if ! git -C /src rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "${c_dim}cloning /src -> /work ...${c_off}" >&2
+echo "${c_dim}cloning /src -> $WORK ...${c_off}" >&2
 # --no-hardlinks: hardlinks into a read-only virtiofs mount are a trap.
-git clone --no-hardlinks /src /work 2>&1 | sed 's/^/    /' >&2 || exit 1
+git clone --no-hardlinks /src "$WORK" 2>&1 | sed 's/^/    /' >&2 || exit 1
 
 # Carry over uncommitted work so the sandbox sees what you actually have.
 if ! git -C /src diff --quiet HEAD 2>/dev/null; then
   echo "${c_dim}applying uncommitted changes from /src${c_off}" >&2
-  git -C /src diff HEAD | git -C /work apply --index - 2>/dev/null \
+  git -C /src diff HEAD | git -C "$WORK" apply --index - 2>/dev/null \
     || echo "${c_ylw}warn${c_off} could not apply all uncommitted changes" >&2
 fi

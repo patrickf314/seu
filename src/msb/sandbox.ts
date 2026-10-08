@@ -45,28 +45,6 @@ export const HOST_REPOSITORY_MOUNT = '/host-m2';
 export const installSandboxName = (instance: Instance): string => `seu-install-${instance.name}`;
 
 /**
- * Creates the directory layout inside the named volume. Must run before
- * anything resolves /work, ~/.m2 or ~/.cache: those are symlinks into /seu, and
- * the volume mounts empty the first time. This is also why no sandbox is
- * created with a /work workdir -- the image's workdir is validated at create
- * time, when the symlink still dangles.
- */
-export async function bootstrapVolume(sandbox: Sandbox): Promise<void> {
-    const out = await execInSandbox(sandbox, {
-        cmd: 'sh',
-        args: [
-            '-c',
-            'mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /seu/mise && chown seu:seu /seu /seu/work /seu/m2 /seu/cache /seu/mise',
-        ],
-        root: true,
-        timeoutMs: 60_000,
-    });
-    if (!out.ok) {
-        die('could not bootstrap the /seu volume layout');
-    }
-}
-
-/**
  * Egress for one sandbox. Fixed at creation -- microsandbox has no way to
  * narrow a running sandbox's policy -- which is why the install sandbox and the
  * session are two different sandboxes over one shared volume.
@@ -148,14 +126,26 @@ export async function createSandbox(spec: SandboxSpec): Promise<Sandbox> {
 }
 
 /**
- * Clone /src into /work, carrying over uncommitted changes. See
- * vm/session-init.sh; it is idempotent and leaves a populated /work alone, so
- * the install sandbox and the session can both call it.
+ * Set up the home volume, then clone /src into ~/work, carrying over
+ * uncommitted changes. Both scripts are idempotent and leave a populated home
+ * and ~/work alone, so the install sandbox and the session can both call this.
  *
- * A problem here is reported, not fatal: an empty /work is worth a session you
- * can still get a shell in and look around.
+ * The home has to be set up first, as root: the volume mounts empty and
+ * root-owned the first time (see vm/seu-home-init.sh).
+ *
+ * A problem with ~/work is reported, not fatal: an empty ~/work is worth a
+ * session you can still get a shell in and look around.
  */
 export async function prepareWork(sandbox: Sandbox): Promise<void> {
+    const home = await execInSandbox(sandbox, {
+        cmd: '/usr/local/bin/seu-home-init.sh',
+        root: true,
+        timeoutMs: 5 * 60_000,
+    });
+    if (!home.ok) {
+        die(`could not set up ${VOLUME_MOUNT}: ${(home.stderr || home.stdout).trim()}`);
+    }
+
     const result = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: ['-lc', '/usr/local/bin/session-init.sh'],

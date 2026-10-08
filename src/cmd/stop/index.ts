@@ -9,7 +9,7 @@ export const STOP: Command = {
 
     details: `Stops the session sandbox of the SEU named by --name -- by default the worktree's own -- and drops its port forwards, which have nothing on the other end once it is down.
 
-Nothing is lost: /work, ~/.m2, ~/.cache and the pulled Docker images live in the named volume, and the sandbox keeps its root disk. \`seu start\` or \`seu shell\` brings it back as it was, without installing anything again. Processes running inside -- dockerd, a dev server, a \`claude\` session -- do end, and an attached \`seu shell\` is closed.
+Nothing is lost: ~/work, ~/.m2, ~/.cache and the pulled Docker images live in the named volume, and the sandbox keeps its root disk. \`seu start\` or \`seu shell\` brings it back as it was, without installing anything again. Processes running inside -- dockerd, a dev server, a \`claude\` session -- do end, and an attached \`seu shell\` is closed.
 
 To get rid of a SEU for good, use \`seu remove\`.`,
 
