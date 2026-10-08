@@ -2,16 +2,23 @@
 // where work can exist that exists nowhere else.
 
 import type { Sandbox } from 'microsandbox';
-import { LOG } from './common/log.ts';
-import { die } from './common/error.ts';
-import { run } from './host.ts';
-import type { Instance } from './config/project.ts';
-import { exec, SRC_MOUNT, WORK_DIR } from './sandbox.ts';
+import { LOG } from './log.ts';
+import { die } from './error.ts';
+import { execOnHost } from '../host/exec.ts';
+import type { Instance } from '../config/project.ts';
+import { SRC_MOUNT, WORK_DIR } from '../sandbox.ts';
+import { execInSandbox } from '../msb/exec.ts';
 
 export interface UnsavedWork {
-    /** `git status --porcelain` lines. */
+
+    /**
+     * `git status --porcelain` lines.
+     */
     readonly changes: readonly string[];
-    /** Branches whose tip commit the host repository does not have. */
+
+    /**
+     * Branches whose tip commit the host repository does not have.
+     */
     readonly branches: readonly string[];
 }
 
@@ -27,13 +34,13 @@ export interface UnsavedWork {
  * as "unknown", not as "nothing".
  */
 export async function unsavedWork(instance: Instance, sandbox: Sandbox): Promise<UnsavedWork | undefined> {
-    const state = await exec(sandbox, {
+    const state = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: ['-c', 'git status --porcelain && echo "--refs--" && git for-each-ref refs/heads --format="%(objectname) %(refname:short)"'],
-        user: 'seu',
         cwd: WORK_DIR,
         timeoutMs: 60_000,
     });
+
     if (!state.ok) {
         LOG.warn(`could not inspect ${WORK_DIR}: ${(state.stderr || state.stdout).trim().split('\n').pop() ?? ''}`);
         return undefined;
@@ -45,7 +52,7 @@ export async function unsavedWork(instance: Instance, sandbox: Sandbox): Promise
     const branches: string[] = [];
     for (const line of refs.trim().split('\n').filter((l) => l !== '')) {
         const [sha, branch] = line.split(' ');
-        const known = await run('git', ['-C', instance.project.root, 'cat-file', '-e', `${sha}^{commit}`]);
+        const known = await execOnHost({ cmd: 'git', args: ['-C', instance.project.root, 'cat-file', '-e', `${sha}^{commit}`] });
         if (known.code !== 0) branches.push(branch);
     }
     return { changes, branches };
@@ -113,7 +120,7 @@ if ! git -C ${SRC_MOUNT} diff --quiet HEAD; then
 fi
 echo "$branch $head"
 `;
-    const result = await exec(sandbox, { cmd: 'bash', args: ['-c', script], user: 'seu', timeoutMs: 10 * 60_000 });
+    const result = await execInSandbox(sandbox, { cmd: 'bash', args: ['-c', script], timeoutMs: 10 * 60_000 });
     if (!result.ok) {
         const detail = (result.stderr || result.stdout).trim().split('\n').slice(-5).join('\n    ');
         die(`could not move ${WORK_DIR} onto this worktree\n    ${detail}`);

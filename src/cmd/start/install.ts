@@ -1,32 +1,38 @@
-// The pre-install phase of `seu start`: everything `image.pre-install` in
-// .seu/config.json asks for, fetched into the named volume while the install
-// sandbox still has egress.
-//
-// This is the whole point of having an install sandbox at all. A session has no
-// network, so an image that is not in /seu/docker and an artifact that is not
-// in /seu/m2 by the time this returns is simply not available in the session --
-// it fails there as a pull timeout or an "artifact has not been downloaded from
-// it before", far from the config line that forgot to name it. Hence: every
-// step that fails is reported, and a single failure fails the start.
-
 import type { Sandbox } from 'microsandbox';
-import type { PreInstallStep } from '../../config/config.ts';
+import type { InstallStep } from '../../config/config.ts';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { exec, SRC_MOUNT } from '../../sandbox.ts';
+import { SRC_MOUNT, WORK_DIR } from '../../sandbox.ts';
+import { installToolchain } from './toolchain.ts';
+import { execInSandbox } from '../../msb/exec.ts';
 
-const COMPOSE_TIMEOUT_MS = 2 * 60_000;
-const PULL_TIMEOUT_MS = 20 * 60_000;
-const MAVEN_TIMEOUT_MS = 20 * 60_000;
+const COMPOSE_TIMEOUT_MS = 2 * 60_000; // 2min
+const PULL_TIMEOUT_MS = 20 * 60_000; // 20min
+const MAVEN_TIMEOUT_MS = 20 * 60_000; // 20min
+const SCRIPT_TIMEOUT_MS = 90 * 60_000; // 20min
+
+/** The steps that need a docker daemon in the install sandbox. */
+export function needsDocker(steps: readonly InstallStep[]): boolean {
+    // A script gets it unconditionally, because a build command is opaque to
+    // us, and the ones that want Docker (Testcontainers, buildpacks, a compose
+    // file started by a test) fail in ways that point anywhere but at a
+    // missing daemon.
+    return steps.some((s) => s.type === 'docker' || s.type === 'docker-compose' || s.type === 'script');
+}
 
 /**
  * Run every step, in declaration order.
  *
  * Steps are NOT run in parallel: `mvn dependency:get` and `docker pull` both
  * write into the same volume, the order in the config is the order the author
- * reasoned about, and a serial log is the one that says which line is slow.
+ * reasoned about -- the mise step before anything that needs its JDK -- and a
+ * serial log is the one that says which line is slow.
+ *
+ * A failed fetch does not stop the fetches after it, so one start reports all
+ * of them; but they are settled before a mise or script step, which would
+ * otherwise spend its time on a template that is already broken.
  */
-export async function runPreInstall(sandbox: Sandbox, steps: readonly PreInstallStep[]): Promise<void> {
+export async function runInstall(sandbox: Sandbox, steps: readonly InstallStep[]): Promise<void> {
     // Across the whole run, not per step: two compose files naming the same
     // postgres is the normal case, and the second pull is pure wall-clock.
     const pulled = new Set<string>();
@@ -51,15 +57,28 @@ export async function runPreInstall(sandbox: Sandbox, steps: readonly PreInstall
                 await resolveArtifact(sandbox, step.artifact, failures);
                 break;
             }
+            case 'mise': {
+                failOn(failures);
+                await installToolchain(sandbox, step.toml);
+                break;
+            }
+            case 'script': {
+                failOn(failures);
+                await runScript(sandbox, step.script);
+                break;
+            }
         }
     }
 
-    if (failures.length > 0) {
-        die(
-            `${failures.length} pre-install step(s) failed -- the session has no network, ` +
+    failOn(failures);
+}
+
+function failOn(failures: readonly string[]): void {
+    if (failures.length === 0) return;
+    die(
+        `${failures.length} install step(s) failed -- the session has no network, ` +
             `so anything missing now stays missing:\n    ${failures.join('\n    ')}`,
-        );
-    }
+    );
 }
 
 /**
@@ -73,13 +92,12 @@ export async function runPreInstall(sandbox: Sandbox, steps: readonly PreInstall
  * so pulling the list it prints fails on a perfectly correct compose file.
  */
 async function composeImages(sandbox: Sandbox, file: string): Promise<string[]> {
-    const result = await exec(sandbox, {
+    const result = await execInSandbox(sandbox, {
         cmd: 'bash',
         // `--profile '*'`: a service behind a profile is still a service
         // somebody will start one day, and the session has no second chance to
         // pull it. Compose would leave them out of the default model.
         args: ['-lc', 'docker compose --profile "*" -f "$SEU_COMPOSE_FILE" config --format json'],
-        user: 'seu',
         env: { SEU_COMPOSE_FILE: `${SRC_MOUNT}/${file}` },
         timeoutMs: COMPOSE_TIMEOUT_MS,
     });
@@ -115,14 +133,13 @@ async function pull(sandbox: Sandbox, image: string, pulled: Set<string>, failur
     }
     pulled.add(image);
 
-    const result = await exec(sandbox, {
+    const result = await execInSandbox(sandbox, {
         // The reference goes through the environment rather than the command
         // line: the schema already rejects anything that is not an image
         // reference, and this way nothing in the repository's config can reach
         // a shell as syntax.
         cmd: 'bash',
         args: ['-lc', 'docker pull -q "$SEU_IMAGE"'],
-        user: 'seu',
         env: { SEU_IMAGE: image },
         timeoutMs: PULL_TIMEOUT_MS,
     });
@@ -142,10 +159,9 @@ async function pull(sandbox: Sandbox, image: string, pulled: Set<string>, failur
  * from the command line in the session will go looking for.
  */
 async function resolveArtifact(sandbox: Sandbox, artifact: string, failures: string[]): Promise<void> {
-    const result = await exec(sandbox, {
+    const result = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: ['-lc', 'mvn -B -q dependency:get -Dartifact="$SEU_ARTIFACT"'],
-        user: 'seu',
         env: { SEU_ARTIFACT: artifact },
         timeoutMs: MAVEN_TIMEOUT_MS,
     });
@@ -157,6 +173,50 @@ async function resolveArtifact(sandbox: Sandbox, artifact: string, failures: str
         report(result.stderr || result.stdout);
         failures.push(`mvn dependency:get ${artifact}`);
     }
+}
+
+async function runScript(sandbox: Sandbox, script: string): Promise<void> {
+    LOG.step('Running install script');
+    LOG.debug(`${WORK_DIR}$ ${script}`);
+    warnOnRootWork(script);
+
+    const result = await execInSandbox(sandbox, {
+        // The script IS a shell command -- see ScriptStep in
+        // src/config/config.ts. It runs as `seu`, in a sandbox that is
+        // destroyed right after, and never on the host.
+        cmd: 'bash',
+        args: ['-lc', script],
+        cwd: WORK_DIR,
+        timeoutMs: SCRIPT_TIMEOUT_MS,
+        stream: true,
+    });
+
+    if (!result.ok) {
+        die(
+            result.timedOut
+                ? `install script did not finish within ${SCRIPT_TIMEOUT_MS / 60_000} minutes`
+                : `install script failed (exit ${result.code})`,
+        );
+    }
+    LOG.ok('install script finished');
+}
+
+/**
+ * The install runs as `seu`, in a sandbox whose rootfs is thrown away. A step
+ * that wants root is therefore wrong twice over, and the way it announces
+ * itself -- a sudo password prompt on a VM with no password -- says neither.
+ *
+ * A warning rather than a refusal: the script is the project's business, and a
+ * `docker run` of something that happens to contain the word apt-get is nobody
+ * else's. But it names the fix, which is the part that is hard to guess.
+ */
+function warnOnRootWork(script: string): void {
+    const needsRoot = /\b(sudo|apt-get|apt-key|install-deps)\b/.exec(script);
+    if (needsRoot === null) return;
+
+    LOG.warn(`the install script contains \`${needsRoot[0]}\`, which wants root`);
+    LOG.warn('    this runs as `seu`, and anything outside /seu dies with this sandbox');
+    LOG.warn('    system packages belong in the image (`image` in .seu/config.json)');
 }
 
 /**

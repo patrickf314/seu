@@ -3,13 +3,15 @@
 // microsandbox SDK instead of the `msb` CLI.
 
 import type { ExecHandle, NetworkPolicyBuilder, Sandbox, SandboxStatus } from "microsandbox";
-import { sdk } from "./microsandbox/microsandboxSdk.ts";
-import { run, sleep } from "./host.ts";
+import { sdk } from "./msb/sdk.ts";
+import { sleep } from "./host.ts";
+import { execOnHost } from "./host/exec.ts";
 import { LOG } from "./common/log.ts";
 import { die } from "./common/error.ts";
 import type { Instance, Project } from "./config/project.ts";
 import { dirname, join } from "node:path";
 import { existsSync, rmSync } from "node:fs";
+import { execInSandbox } from './msb/exec.ts';
 
 // The SDK types `SandboxBuilder.network()`'s callback argument as `any`, so the
 // builders reached through it carry no types of their own. These recover them
@@ -89,11 +91,11 @@ export async function cloneVolume(source: string, target: string, labels: Record
   if (!existsSync(from)) die(`no disk image for volume ${source} at ${from}`);
 
   rmSync(to, { force: true });
-  if ((await run("cp", ["-c", from, to])).code === 0) return;
+  if ((await execOnHost({ cmd: "cp", args: ["-c", from, to] })).code === 0) return;
 
   LOG.warn("this filesystem cannot clone files; copying the volume in full instead");
   rmSync(to, { force: true });
-  const copy = await run("cp", [from, to]);
+  const copy = await execOnHost({ cmd: "cp", args: [from, to] });
   if (copy.code !== 0) die(`could not copy volume ${source} to ${target}: ${copy.stderr.trim()}`);
 }
 
@@ -105,94 +107,16 @@ export async function cloneVolume(source: string, target: string, labels: Record
  * time, when the symlink still dangles.
  */
 export async function bootstrapVolume(sandbox: Sandbox): Promise<void> {
-  const out = await exec(sandbox, {
+  const out = await execInSandbox(sandbox, {
     cmd: "sh",
     args: [
       "-c",
       "mkdir -p /seu/work /seu/m2 /seu/cache /seu/docker /seu/mise && chown seu:seu /seu /seu/work /seu/m2 /seu/cache /seu/mise",
     ],
-    user: "root",
+    root: true,
     timeoutMs: 60_000,
   });
   if (!out.ok) die("could not bootstrap the /seu volume layout");
-}
-
-export interface ExecRequest {
-  cmd: string;
-  args?: string[];
-  user?: string;
-  env?: Record<string, string>;
-  cwd?: string;
-  /** Host-side watchdog. Anything that could hang must set one. */
-  timeoutMs?: number;
-  /** Stream stdout/stderr to the terminal as it arrives. */
-  stream?: boolean;
-}
-
-export interface ExecResult {
-  ok: boolean;
-  code: number;
-  stdout: string;
-  stderr: string;
-  /** True when the host-side watchdog killed it. */
-  timedOut: boolean;
-}
-
-/**
- * A bounded exec.
- *
- * The CLI's `--timeout` never worked -- it neither returned nor killed the
- * command when the budget expired -- so bash grew a host-side watchdog. The SDK
- * exposes a real handle with kill(), so the watchdog is a timer that kills it.
- */
-export async function exec(sandbox: Sandbox, req: ExecRequest): Promise<ExecResult> {
-  const handle: ExecHandle = await sandbox.execStreamWith(req.cmd, (b) => {
-    if (req.args?.length) b.args(req.args);
-    if (req.user) b.user(req.user);
-    if (req.cwd) b.cwd(req.cwd);
-    if (req.env) b.envs(req.env);
-    return b;
-  });
-
-  let timedOut = false;
-  const watchdog =
-    req.timeoutMs === undefined
-      ? undefined
-      : setTimeout(() => {
-          timedOut = true;
-          void handle.kill().catch(() => {});
-        }, req.timeoutMs);
-
-  let stdout = "";
-  let stderr = "";
-  let code = -1;
-  try {
-    for await (const event of handle) {
-      if (event.kind === "stdout") {
-        stdout += Buffer.from(event.data).toString();
-        if (req.stream) process.stderr.write(event.data);
-      } else if (event.kind === "stderr") {
-        stderr += Buffer.from(event.data).toString();
-        if (req.stream) process.stderr.write(event.data);
-      } else if (event.kind === "exited") {
-        code = event.code;
-      }
-    }
-  } finally {
-    if (watchdog) clearTimeout(watchdog);
-  }
-
-  return { ok: !timedOut && code === 0, code, stdout, stderr, timedOut };
-}
-
-/** Exec, or fail the command with `message` plus the guest's own complaint. */
-export async function execOk(sandbox: Sandbox, req: ExecRequest, message: string): Promise<ExecResult> {
-  const result = await exec(sandbox, req);
-  if (!result.ok) {
-    const detail = (result.stderr || result.stdout).trim().split("\n").slice(-5).join("\n    ");
-    die(result.timedOut ? `${message} (timed out)` : detail ? `${message}\n    ${detail}` : message);
-  }
-  return result;
 }
 
 /**
@@ -204,7 +128,7 @@ export async function execOk(sandbox: Sandbox, req: ExecRequest, message: string
  */
 export async function waitForAgent(sandbox: Sandbox): Promise<void> {
   for (let i = 0; i < 45; i++) {
-    const probe = await exec(sandbox, { cmd: "true", user: "root", timeoutMs: 10_000 });
+    const probe = await execInSandbox(sandbox, { cmd: "true", root: true, timeoutMs: 10_000 });
     if (probe.ok) return;
     await sleep(1000);
   }
@@ -252,10 +176,10 @@ export async function startDockerd(sandbox: Sandbox): Promise<ExecHandle | undef
   }
 
   LOG.warn("dockerd failed to start after 3 attempts");
-  const log = await exec(sandbox, {
+  const log = await execInSandbox(sandbox, {
     cmd: "sh",
     args: ["-c", "tail -20 /var/log/dockerd.log"],
-    user: "root",
+    root: true,
     timeoutMs: 20_000,
   });
   for (const line of log.stdout.trim().split("\n")) LOG.warn(`    ${line}`);
@@ -263,10 +187,10 @@ export async function startDockerd(sandbox: Sandbox): Promise<ExecHandle | undef
 }
 
 async function dockerdRunning(sandbox: Sandbox): Promise<boolean> {
-  const probe = await exec(sandbox, {
+  const probe = await execInSandbox(sandbox, {
     cmd: "sh",
     args: ["-c", "docker info >/dev/null 2>&1"],
-    user: "root",
+    root: true,
     timeoutMs: 20_000,
   });
   return probe.ok;
@@ -296,7 +220,7 @@ export interface NetworkSpec {
 
 export interface ProjectSandboxSpec {
   readonly name: string;
-  /** Base image reference, already loaded into microsandbox's image store. */
+  /** Image reference, already loaded into microsandbox's image store. */
   readonly image: string;
   readonly project: Project;
   /** The named disk volume mounted at /seu. Created if it does not exist. */
@@ -440,10 +364,9 @@ export async function destroySandbox(sandbox: Sandbox): Promise<void> {
  * can still get a shell in and look around.
  */
 export async function prepareWork(sandbox: Sandbox): Promise<void> {
-  const result = await exec(sandbox, {
+  const result = await execInSandbox(sandbox, {
     cmd: "bash",
     args: ["-lc", "/usr/local/bin/session-init.sh"],
-    user: "seu",
     timeoutMs: 15 * 60_000,
     stream: true,
   });

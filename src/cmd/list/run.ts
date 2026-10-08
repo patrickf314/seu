@@ -10,7 +10,7 @@
 
 import { join } from 'node:path';
 import type { SandboxHandle } from 'microsandbox';
-import { sdk } from '../../microsandbox/microsandboxSdk.ts';
+import { sdk } from '../../msb/sdk.ts';
 import { die } from '../../common/error.ts';
 import { LOG } from '../../common/log.ts';
 import { resolveProject, STATE_ROOT } from '../../config/project.ts';

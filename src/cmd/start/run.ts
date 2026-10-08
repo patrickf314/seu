@@ -18,10 +18,9 @@
 // actually happens.
 
 import type { SandboxStatus } from 'microsandbox';
-import { type MicrosandboxSdk, sdk } from '../../microsandbox/microsandboxSdk.ts';
+import { type SDK, sdk } from '../../msb/sdk.ts';
 import { CONFIG_FILE, loadConfig, type SeuConfig } from '../../config/config.ts';
-import { succeeds } from '../../host.ts';
-import { buildBaseImage, imageLoaded, imageTag } from './image.ts';
+import { requireImage } from '../../msb/image.ts';
 import { obtainTemplate, type Template } from './template.ts';
 import { toolchainFingerprint } from './toolchain.ts';
 import { LOG } from '../../common/log.ts';
@@ -36,7 +35,7 @@ import {
     takeInstanceName,
 } from '../../config/project.ts';
 import { requireSession, type Session } from '../../session.ts';
-import { guardUnsavedWork, syncWorkToSource } from '../../work.ts';
+import { guardUnsavedWork, syncWorkToSource } from '../../common/work.ts';
 import { enterShell } from '../shell/run.ts';
 import { stopAllForwards } from '../../network/forward.ts';
 import {
@@ -90,7 +89,7 @@ function parseArgs(argv: string[]): StartOptions {
     return opts;
 }
 
-function validateMicroSandbox(resolveRuntime: MicrosandboxSdk['resolveRuntime']): void {
+function validateMicroSandbox(resolveRuntime: SDK['resolveRuntime']): void {
     try {
         const runtime = resolveRuntime();
         LOG.ok(`microsandbox runtime ${runtime.msbPath} (${runtime.origin})`);
@@ -114,7 +113,7 @@ export async function run(argv: string[]): Promise<number> {
     LOG.ok(`SEU ${instance.name} (${name})`);
     LOG.ok(config.file === undefined ? `no ${CONFIG_FILE} -- using defaults` : `profile  ${CONFIG_FILE}`);
 
-    const tag = imageTag();
+    const tag = config.image;
     const status = await sandboxStatus(name);
 
     if (!opts.reinstall && status !== 'absent') {
@@ -130,8 +129,9 @@ export async function run(argv: string[]): Promise<number> {
         await guardUnsavedWork(instance, session.sandbox, opts.force, 'reinstall');
     }
 
-    LOG.step('Base image');
-    await ensureImage(tag, instance, opts.reinstall);
+    LOG.step('Image');
+    await requireImage(tag);
+    LOG.ok(tag);
 
     const volume = volumeName(instance.slug);
     if (!opts.reinstall && (await volumeExists(volume))) {
@@ -154,22 +154,6 @@ export async function run(argv: string[]): Promise<number> {
     LOG.ok(`${volume} (${Date.now() - started} ms)`);
 
     return enter(instance, await startSession(tag, instance, true), opts);
-}
-
-/**
- * Host Docker is only needed when there is something to build, so a start on
- * a machine whose Docker is down still works as long as the image is loaded.
- */
-async function ensureImage(tag: string, instance: Instance, rebuild: boolean): Promise<void> {
-    if (!rebuild && (await imageLoaded(tag))) {
-        LOG.ok(`${tag} already loaded`);
-        return;
-    }
-
-    if (!(await succeeds('docker', ['info']))) {
-        die('host Docker is not reachable -- needed to build the base image');
-    }
-    await buildBaseImage(tag, instance.stateDir);
 }
 
 /**

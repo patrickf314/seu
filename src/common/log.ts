@@ -11,32 +11,39 @@ const ASCII_CODE = {
     OFF: '[0m',
 } as const;
 
+const DEFAULT_PAD = '            ' as const;
+
 function print(msg: string): void {
-    process.stderr.write(`${msg}\n`);
+    process.stderr.write(`${msg}`);
+}
+
+function println(msg: string): void {
+    print(`${msg}\n`);
 }
 
 export const LOG = {
     step: (msg: string): void => {
-        print(`\n${ASCII_CODE.BLUE}[Step]${ASCII_CODE.OFF} ${ASCII_CODE.BOLD}${msg}${ASCII_CODE.OFF}`);
+        println(`\n${ASCII_CODE.BLUE}[Step]${ASCII_CODE.OFF} ${ASCII_CODE.BOLD}${msg}${ASCII_CODE.OFF}`);
     },
 
     info: (msg: string): void => {
-        print(`            ${msg}`);
+        println(`${DEFAULT_PAD}${msg}`);
     },
 
     debug: (msg: string): void => {
-        print(`            ${ASCII_CODE.DIM}${msg}${ASCII_CODE.OFF}`);
+        println(`${DEFAULT_PAD}${ASCII_CODE.DIM}${msg}${ASCII_CODE.OFF}`);
     },
 
     ok: (msg: string): void => {
-        print(`  ${ASCII_CODE.GREEN}[ok]     ${ASCII_CODE.OFF} ${msg}`);
+        println(`  ${ASCII_CODE.GREEN}[ok]     ${ASCII_CODE.OFF} ${msg}`);
     },
 
     warn: (msg: string): void => {
-        print(`  ${ASCII_CODE.YELLOW}[warn]  ${ASCII_CODE.OFF} ${msg}`);
+        println(`  ${ASCII_CODE.YELLOW}[warn]  ${ASCII_CODE.OFF} ${msg}`);
     },
     error: (msg: string): void => {
-        print(`  ${ASCII_CODE.RED}[error]${ASCII_CODE.OFF} ${msg}`);
+        println(`  ${ASCII_CODE.RED}[error]${ASCII_CODE.OFF} ${msg}`);
     },
-    print
+    print,
+    println,
 } as const;

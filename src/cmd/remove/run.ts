@@ -12,7 +12,7 @@ import { die } from '../../common/error.ts';
 import { type Instance, resolveInstance, resolveProject, seuCommand, takeInstanceName } from '../../config/project.ts';
 import { listForwards, stopAllForwards } from '../../network/forward.ts';
 import { requireSession } from '../../session.ts';
-import { guardUnsavedWork } from '../../work.ts';
+import { guardUnsavedWork } from '../../common/work.ts';
 import {
     installSandboxName,
     removeSandbox,

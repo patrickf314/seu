@@ -6,7 +6,7 @@
 // config, so a stopped session holds nothing and a rotated item is picked up by
 // the next `seu shell`.
 
-import { run } from '../host.ts';
+import { execOnHost } from '../host/exec.ts';
 import { LOG } from '../common/log.ts';
 import type { SeuConfig } from './config.ts';
 
@@ -25,7 +25,7 @@ export async function resolveSecrets(config: SeuConfig): Promise<Record<string, 
         // The reference is printed on purpose: the profile comes from the
         // repository, and which 1Password items it asks for is yours to see.
         try {
-            const r = await run('op', ['read', '--no-newline', reference]);
+            const r = await execOnHost({ cmd: 'op', args: ['read', '--no-newline', reference] });
             if (r.code === 0 && r.stdout) {
                 resolved[name] = r.stdout;
                 LOG.ok(`${name} <- ${reference}`);

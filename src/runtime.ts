@@ -20,7 +20,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { LOG } from "./common/log.ts";
-import { sdk } from "./microsandbox/microsandboxSdk.ts";
+import { sdk } from "./msb/sdk.ts";
 import { die } from "./common/error.ts";
 
 const PLATFORM_PACKAGES: Record<string, string> = {

@@ -12,11 +12,12 @@
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { run as spawn, sleep } from '../../host.ts';
+import { sleep } from '../../host.ts';
+import { execOnHost } from '../../host/exec.ts';
 import { loadConfig } from '../../config/config.ts';
 import { resolveInstance, resolveProject } from '../../config/project.ts';
 import { requireSession } from '../../session.ts';
-import { exec, sessionSandboxName, WORK_DIR } from '../../sandbox.ts';
+import { sessionSandboxName, WORK_DIR } from '../../sandbox.ts';
 import {
     hostPortListening,
     parsePort,
@@ -25,6 +26,7 @@ import {
     startForward,
     stopForward,
 } from '../../network/forward.ts';
+import { execInSandbox } from '../../msb/exec.ts';
 
 /** Playwright's own default for show-trace, and ten more after it. */
 const FIRST_PORT = 9323;
@@ -130,10 +132,9 @@ async function trace(opts: TraceOptions): Promise<number> {
         await viewer.handle.kill().catch(() => {});
         // Killing the host-side exec does not reap the guest process -- the
         // same lesson vm/dockerd-run.sh records.
-        await exec(session.sandbox, {
+        await execInSandbox(session.sandbox, {
             cmd: 'pkill',
             args: ['-f', 'com.microsoft.playwright.CLI'],
-            user: 'seu',
             timeoutMs: 20_000,
         }).catch(() => {});
     };
@@ -158,7 +159,7 @@ async function trace(opts: TraceOptions): Promise<number> {
         // whatever origin it asked -- the forwarded one included.
         const url = `http://127.0.0.1:${port}/`;
         LOG.ok(url);
-        if (opts.open) await spawn('open', [url]).catch(() => undefined);
+        if (opts.open) await execOnHost({ cmd: 'open', args: [url] }).catch(() => undefined);
         LOG.info('Ctrl-C to stop the viewer and drop the forward');
 
         const outcome = await Promise.race([viewer.exited, interrupted]);
@@ -175,10 +176,9 @@ async function trace(opts: TraceOptions): Promise<number> {
 }
 
 async function requireFile(sandbox: Sandbox, rel: string, what: string): Promise<void> {
-    const found = await exec(sandbox, {
+    const found = await execInSandbox(sandbox, {
         cmd: 'test',
         args: ['-f', `${WORK_DIR}/${rel}`],
-        user: 'seu',
         timeoutMs: 30_000,
     });
     if (!found.ok) die(`no such ${what} in the VM: ${WORK_DIR}/${rel}`);
@@ -190,7 +190,7 @@ async function requireFile(sandbox: Sandbox, rel: string, what: string): Promise
  * with Playwright on its test classpath.
  */
 async function guessPom(sandbox: Sandbox, trace: string): Promise<string | undefined> {
-    const found = await exec(sandbox, {
+    const found = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: [
             '-c',
@@ -200,7 +200,6 @@ async function guessPom(sandbox: Sandbox, trace: string): Promise<string | undef
                 'dir=$(dirname "$dir"); ' +
                 'done; exit 1',
         ],
-        user: 'seu',
         cwd: WORK_DIR,
         env: { SEU_TRACE: trace },
         timeoutMs: 30_000,
@@ -277,10 +276,9 @@ async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: number): Pr
             die('the trace viewer exited before it opened a port');
         }
 
-        const probe = await exec(sandbox, {
+        const probe = await execInSandbox(sandbox, {
             cmd: 'bash',
             args: ['-c', `exec 3<>/dev/tcp/127.0.0.1/${port}`],
-            user: 'seu',
             timeoutMs: 10_000,
         });
         if (probe.ok) return;

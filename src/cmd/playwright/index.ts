@@ -18,7 +18,7 @@ The viewer ships inside the Playwright Java client, so it is started with \`mvn 
 
   { "playwright": { "pom": "club/club-ui/club-ui-test/pom.xml" } }
 
-or pass --pom. Offline, because the session has no network: the exec plugin and Playwright have to be in ~/.m2 already, which an \`install.script\` that builds that module takes care of.
+or pass --pom. Offline, because the session has no network: the exec plugin and Playwright have to be in ~/.m2 already, which an install \`script\` step that builds that module takes care of.
 
 The forward is an ordinary \`seu port\` forward while it lasts. Ctrl-C stops the viewer and drops it.`,
 

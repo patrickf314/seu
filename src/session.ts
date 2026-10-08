@@ -2,11 +2,11 @@
 // invariant everything after `start` depends on -- that it is running.
 //
 // `start` owns creating it. The commands here only ever find it, because making
-// one means `install.script`, which is an hour on a cold reactor and nothing
+// one means running the `install` steps, an hour on a cold reactor and nothing
 // `seu shell` should trigger behind your back.
 
 import type { Sandbox, SandboxStatus } from 'microsandbox';
-import { sdk } from './microsandbox/microsandboxSdk.ts';
+import { sdk } from './msb/sdk.ts';
 import { LOG } from './common/log.ts';
 import { die } from './common/error.ts';
 import { type Instance, seuCommand } from './config/project.ts';

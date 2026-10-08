@@ -17,11 +17,7 @@ import type { Project } from './project.ts';
 
 export const CONFIG_FILE = join('.seu', 'config.json');
 
-const DEFAULT_MISE_TOML = './mise.toml';
-
-const RepositoryName = z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9._/-]*$/, 'must be a lowercase docker repository name');
+const DEFAULT_IMAGE = 'seu-vm-image';
 
 const ProjectPath = z
     .string()
@@ -81,7 +77,12 @@ const MavenStep = z
     })
     .strict();
 
-const PreInstallStepSchema = z.discriminatedUnion('type', [DockerStep, DockerComposeStep, MavenStep]);
+const MiseStep = z
+    .object({
+        type: z.literal('mise'),
+        toml: ProjectPath,
+    })
+    .strict();
 
 /**
  * The one value in this file that is meant to BE a command. Everything else is
@@ -90,7 +91,20 @@ const PreInstallStepSchema = z.discriminatedUnion('type', [DockerStep, DockerCom
  * project's own build tool. It only ever runs inside the guest, as `seu`, in a
  * sandbox that is thrown away afterwards -- the host never sees it.
  */
-const InstallScript = z.string().min(1, 'must be a shell command');
+const ScriptStep = z
+    .object({
+        type: z.literal('script'),
+        script: z.string().trim().min(1, 'must be a shell command'),
+    })
+    .strict();
+
+const InstallStepSchema = z.discriminatedUnion('type', [
+    DockerStep,
+    DockerComposeStep,
+    MavenStep,
+    MiseStep,
+    ScriptStep,
+]);
 
 /**
  * A `seu port` spec, as on the command line: `8080`, `"5173:5173"`,
@@ -118,40 +132,20 @@ const SecretReference = z
 
 const SeuConfigSchema = z
     .object({
-        image: z
-            .object({
-                /**
-                 * Base-image repository name. Default: the worktree's own name, so
-                 * two repositories never share (and invalidate) each other's image.
-                 */
-                tag: RepositoryName.optional(),
-                /**
-                 * The mise toolchain file `seu start` installs into the
-                 * template. Default `./mise.toml`; a project without one gets
-                 * no managed JDK/Maven.
-                 */
-                'mise-toml': ProjectPath.optional(),
-                /**
-                 * What `seu start` fetches into the named volume once the image is
-                 * up, in the order written. The session has no egress, so this is the
-                 * only chance anything here has to arrive.
-                 */
-                'pre-install': z.array(PreInstallStepSchema).optional(),
-            })
-            .strict()
-            .optional(),
+        /**
+         * The microsandbox image every sandbox of the project runs on. It has
+         * to be in msb's image store already: seu never builds or loads one.
+         */
+        image: ImageReference.optional(),
 
+        /**
+         * What `seu start` runs in the install sandbox, in the order written,
+         * while it still has egress. The session has no network, so this is
+         * the only chance anything has to arrive.
+         */
         install: z
-            .object({
-                /**
-                 * What `seu start` runs once the install sandbox is up and still has build
-                 * egress: the project's own "make this checkout buildable" command.
-                 * Omitted means there is nothing to do and the session starts
-                 * straight away.
-                 */
-                script: InstallScript.optional(),
-            })
-            .strict()
+            .array(InstallStepSchema)
+            .refine((steps) => steps.filter((s) => s.type === 'mise').length <= 1, 'at most one mise step')
             .optional(),
 
         playwright: z
@@ -182,7 +176,7 @@ const SeuConfigSchema = z
     .strict();
 
 export type SeuConfigFile = z.infer<typeof SeuConfigSchema>;
-export type PreInstallStep = z.infer<typeof PreInstallStepSchema>
+export type InstallStep = z.infer<typeof InstallStepSchema>;
 
 export interface SeuConfig {
     /**
@@ -190,30 +184,21 @@ export interface SeuConfig {
      */
     readonly file: string | undefined;
 
-    readonly image: {
-        /**
-         * Validated repository name
-         */
-        readonly tag: string;
+    /**
+     * The microsandbox image reference.
+     */
+    readonly image: string;
 
-        /**
-         * Absolute path of the mise config, or undefined when there is none.
-         */
-        readonly miseToml: string | undefined;
+    /**
+     * Names the project's template: the directory name
+     */
+    readonly template: string;
 
-        /**
-         * In declaration order; empty when the project pre-installs nothing.
-         */
-        readonly preInstall: readonly PreInstallStep[];
-    };
-
-    readonly install: {
-        /**
-         * The shell command `seu start` runs, or undefined when the project
-         * configures none.
-         */
-        readonly script: string | undefined;
-    };
+    /**
+     * In declaration order; empty when the project installs nothing. A mise
+     * step's `toml` is absolute.
+     */
+    readonly install: readonly InstallStep[];
 
     readonly playwright: {
         /**
@@ -250,14 +235,9 @@ export function loadConfig(project: Project): SeuConfig {
 
     return {
         file: configFileExists ? file : undefined,
-        image: {
-            tag: config.image?.tag ?? defaultTag(project),
-            miseToml: resolveMiseToml(project, file, config.image?.['mise-toml']),
-            preInstall: config.image?.['pre-install'] ?? []
-        },
-        install: {
-            script: config.install?.script?.trim() || undefined,
-        },
+        image: config.image ?? DEFAULT_IMAGE,
+        template: templateName(project),
+        install: (config.install ?? []).map((step) => (step.type === 'mise' ? resolveMise(project, file, step) : step)),
         playwright: {
             pom: config.playwright?.pom?.replace(/^\.\//, ''),
         },
@@ -277,7 +257,7 @@ function parse(file: string): SeuConfigFile {
     const result = SeuConfigSchema.safeParse(json);
     if (result.success) return result.data;
 
-    // `image.pre-install[5].artifact: the version comes third ...`, one per
+    // `install[5].artifact: the version comes third ...`, one per
     // problem: the path is what tells you which line of the file to look at.
     const issues = result.error.issues.map((issue) => {
         const path = issue.path
@@ -290,28 +270,26 @@ function parse(file: string): SeuConfigFile {
 
 /**
  * The worktree's own directory name, lowercased and stripped of anything a
- * docker repository name cannot hold -- `Projekte/Private/website-react`
- * becomes `website-react`.
+ * volume name cannot hold -- `Projekte/Private/website-react` becomes
+ * `website-react`.
  */
-function defaultTag(project: Project): string {
-    const tag = project.name.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
-    if (!/^[a-z0-9]/.test(tag)) {
-        die(`cannot derive an image tag from the directory name ${project.name}`);
+function templateName(project: Project): string {
+    const name = project.name.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
+    if (!/^[a-z0-9]/.test(name)) {
+        die(`cannot derive a template name from the directory name ${project.name}`);
     }
-    return tag;
+    return name;
 }
 
 /**
- * Configured-but-absent is a typo, not a project without a toolchain, so it
- * fails rather than silently producing a JDK-less template. The default path
- * missing simply means this project manages no toolchain.
+ * The mise step's `toml`, made absolute. Configured-but-absent is a typo, not
+ * a project without a toolchain, so it fails rather than silently producing a
+ * JDK-less template.
  */
-function resolveMiseToml(project: Project, file: string, configured: string | undefined): string | undefined {
-    const rel = (configured ?? DEFAULT_MISE_TOML).replace(/^\.\//, '');
-    const path = join(project.root, rel);
-    if (existsSync(path) && statSync(path).isFile()) {
-        return path;
+function resolveMise(project: Project, file: string, step: InstallStep & { type: 'mise' }): InstallStep {
+    const path = join(project.root, step.toml.replace(/^\.\//, ''));
+    if (!existsSync(path) || !statSync(path).isFile()) {
+        die(`${file}: install mise step: ${step.toml} does not exist`);
     }
-
-    return undefined;
+    return { ...step, toml: path };
 }

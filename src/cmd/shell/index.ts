@@ -9,7 +9,7 @@ export const SHELL: Command = {
 
     details: `Puts you inside the session sandbox of the SEU called <name> -- by default the worktree's own -- as \`seu\`, in /work, in a login bash. This is where you run \`claude\`.
 
-The sandbox has to exist already -- \`seu start\` makes one. A sandbox that is only stopped is started again here, and /work re-prepared, because that costs nothing: the clone and every cache live in the named volume. An absent one is refused rather than created, since creating one means running the project's install.script.
+The sandbox has to exist already -- \`seu start\` makes one. A sandbox that is only stopped is started again here, and /work re-prepared, because that costs nothing: the clone and every cache live in the named volume. An absent one is refused rather than created, since creating one means running the project's \`install\` steps.
 
 dockerd is started by this command and supervised by it. The daemon runs in the foreground of a host-side exec (see vm/dockerd-run.sh), and such an exec dies with the process that opened it -- which is why \`seu start\` cannot be the one holding it, and why Docker inside the VM lives exactly as long as your shell does. The sandbox itself does not: leave the shell and it keeps running, with /work and every cache untouched.
 

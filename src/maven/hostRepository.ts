@@ -20,11 +20,11 @@ import type { Sandbox } from 'microsandbox';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { exec, HOST_REPOSITORY_MOUNT } from '../sandbox.ts';
+import { HOST_REPOSITORY_MOUNT } from '../sandbox.ts';
 import { LOG } from '../common/log.ts';
+import { execInSandbox } from '../msb/exec.ts';
 
-/** The guest path Maven reads settings from. ~/.m2 is a symlink to /seu/m2. */
-const SETTINGS_PATH = '/home/seu/.m2/settings.xml';
+const SETTINGS_PATH = '~/.m2/settings.xml';
 
 /** The repository id the generated settings declares. */
 const REPOSITORY_ID = 'seu-host-m2';
@@ -90,7 +90,7 @@ export async function declareHostRepository(sandbox: Sandbox): Promise<void> {
  * timing out against a remote it cannot reach.
  */
 export async function sealForOffline(sandbox: Sandbox): Promise<void> {
-    const result = await exec(sandbox, {
+    const result = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: [
             '-lc',
@@ -100,7 +100,6 @@ export async function sealForOffline(sandbox: Sandbox): Promise<void> {
                                    -o -name '*.part' -o -name '*.part.lock' \\) -delete 2>/dev/null
              exit 0`,
         ],
-        user: 'seu',
         timeoutMs: 10 * 60_000,
     });
     if (!result.ok) LOG.warn('could not clear the Maven resolution tracking files');
@@ -110,7 +109,7 @@ export async function sealForOffline(sandbox: Sandbox): Promise<void> {
 }
 
 async function writeSettings(sandbox: Sandbox, document: string): Promise<void> {
-    const result = await exec(sandbox, {
+    const result = await execInSandbox(sandbox, {
         // Through the environment, not a heredoc: the document has quotes and
         // newlines in it and none of that should have to survive a shell.
         cmd: 'bash',
@@ -118,7 +117,6 @@ async function writeSettings(sandbox: Sandbox, document: string): Promise<void> 
             '-lc',
             `mkdir -p "$(dirname "${SETTINGS_PATH}")" && printf '%s' "$SEU_SETTINGS_XML" > "${SETTINGS_PATH}"`,
         ],
-        user: 'seu',
         env: { SEU_SETTINGS_XML: document },
         timeoutMs: 60_000,
     });

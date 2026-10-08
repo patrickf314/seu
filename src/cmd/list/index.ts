@@ -8,7 +8,7 @@ export const LIST: Command = {
     args: '[--here]',
     summary: 'list every SEU on this machine, with its worktree and port forwards',
 
-    details: `One line per SEU: its name, whether its session sandbox is running, the base image it was created from, its active port forwards and the worktree it sandboxes. A \`*\` marks the SEUs of the worktree you are in.
+    details: `One line per SEU: its name, whether its session sandbox is running, the image it was created from, its active port forwards and the worktree it sandboxes. A \`*\` marks the SEUs of the worktree you are in.
 
 An install sandbox that is still around is listed too, as \`installing\`: either a \`seu start\` is running right now, or one was killed hard enough that its teardown never ran. In the second case the next \`seu start\` of that SEU replaces it.
 

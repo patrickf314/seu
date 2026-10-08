@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { CONFIG_FILE } from './config.ts';
-import { run } from '../host.ts';
+import { execOnHost } from '../host/exec.ts';
 import { die } from '../common/error.ts';
 
 function requireSEURoot(): string {
@@ -51,8 +51,7 @@ export interface Project {
 /**
  * One SEU of a project. A worktree can have several -- `seu start review` next
  * to the default one -- and each has its own session sandbox, named volume and
- * state dir. Only the base image is shared: it holds the toolchain, which is the
- * project's, not the instance's.
+ * state dir. Only the image and the project's template are shared.
  */
 export interface Instance {
     readonly project: Project;
@@ -69,21 +68,22 @@ export interface Instance {
 
 const INSTANCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export async function resolveProject(start: string = process.cwd()): Promise<Project> {
-    if (!existsSync(start) || !statSync(start).isDirectory()) {
-        die(`not a directory: ${start}`);
+export async function resolveProject(): Promise<Project> {
+    const currentWorkingDirectory = process.cwd();
+    if (!existsSync(currentWorkingDirectory) || !statSync(currentWorkingDirectory).isDirectory()) {
+        die(`not a directory: ${currentWorkingDirectory}`);
     }
 
-    const top = await run('git', ['rev-parse', '--show-toplevel'], { cwd: start });
+    const top = await execOnHost({ cmd: 'git', args: ['rev-parse', '--show-toplevel'], cwd: currentWorkingDirectory });
     if (top.code !== 0 || !top.stdout.trim()) {
-        die(`not inside a git repository: ${start}`);
+        die(`not inside a git repository: ${currentWorkingDirectory}`);
     }
 
     const root = realpathSync(top.stdout.trim());
     const name = basename(root);
 
     let gitDir: string | null = null;
-    const common = await run('git', ['rev-parse', '--git-common-dir'], { cwd: root });
+    const common = await execOnHost({ cmd: 'git', args: ['rev-parse', '--git-common-dir'], cwd: root });
 
     if (common.code === 0 && common.stdout.trim()) {
         const raw = common.stdout.trim();

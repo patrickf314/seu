@@ -7,33 +7,30 @@
 // own, and a new SEU's volume is an APFS clone of that: milliseconds, and no
 // disk space until the two diverge.
 //
-// The template is keyed by the image repository (`image.tag`, by default the
-// directory name of the first worktree) rather than by worktree, so every
-// worktree of a repository shares it: they share that tag already.
+// The template is keyed by the worktree's directory name, so worktrees that
+// share one -- the same checkout under different SEU names -- share it.
 //
 // Building it is the old install step unchanged: a throwaway sandbox with wide
 // egress over the template volume, which is destroyed before anything clones
 // the volume -- so a clone never sees it mounted.
 
-import type { ExecHandle, Sandbox } from 'microsandbox';
-import { CONFIG_FILE, type SeuConfig } from '../../config/config.ts';
+import type { ExecHandle } from 'microsandbox';
+import type { SeuConfig } from '../../config/config.ts';
 import { type Project, STATE_ROOT } from '../../config/project.ts';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { LOG } from '../../common/log.ts';
-import { die } from '../../common/error.ts';
 import { sleep } from '../../host.ts';
 import { buildNetworkPolicy } from '../../network/net.ts';
 import { declareHostRepository, hostRepository, sealForOffline } from '../../maven/hostRepository.ts';
-import { runPreInstall } from './pre-install.ts';
-import { installToolchain, toolchainFingerprint } from './toolchain.ts';
+import { needsDocker, runInstall } from './install.ts';
+import { toolchainFingerprint } from './toolchain.ts';
 import {
     bootstrapVolume,
     createProjectSandbox,
     createVolume,
     destroySandbox,
-    exec,
     prepareWork,
     removeSandbox,
     removeVolume,
@@ -43,13 +40,6 @@ import {
     waitForAgent,
     WORK_DIR,
 } from '../../sandbox.ts';
-
-/**
- * A full `mvn clean install` on a large reactor is a long hour on a cold cache,
- * and the alternative to a generous budget is killing a build that would have
- * finished. The watchdog is only here so a wedged step cannot hang forever.
- */
-const INSTALL_TIMEOUT_MS = 90 * 60_000;
 
 /** Volume labels: what a template was built from, for `seu list` and staleness. */
 export const LABEL_IMAGE = 'seu.image';
@@ -67,9 +57,8 @@ export interface Template {
     readonly toolchain: string | undefined;
 }
 
-/** `seu-template-<image repository>`, with a `/` in the repository made a `-`. */
-export const templateVolumeName = (config: SeuConfig): string =>
-    `${TEMPLATE_PREFIX}${config.image.tag.replace(/[^A-Za-z0-9._-]/g, '-')}`;
+/** `seu-template-<worktree directory name>`. */
+export const templateVolumeName = (config: SeuConfig): string => `${TEMPLATE_PREFIX}${config.template}`;
 
 /** Its throwaway install sandbox, while it is being built. */
 const templateInstallSandboxName = (volume: string): string => `${volume}-install`;
@@ -164,8 +153,8 @@ function alive(pid: number): boolean {
 }
 
 /**
- * (Re)build the project's template from this worktree: pre-install, then
- * `install.script`, into a fresh volume. Only ever under the template lock.
+ * (Re)build the project's template from this worktree: the `install` steps,
+ * into a fresh volume. Only ever under the template lock.
  *
  * The old template is removed first -- clones of it are independent copies, so
  * no SEU depends on it. A build that fails or is interrupted removes its own
@@ -199,12 +188,7 @@ async function buildTemplate(image: string, project: Project, config: SeuConfig,
 }
 
 /**
- * Toolchain, pre-install and `install.script`, in one throwaway sandbox with
- * build egress.
- *
- * Everything it writes goes into the volume -- /work, ~/.m2, ~/.cache and
- * /seu/docker are all in there -- so what it fetches is exactly what an offline
- * session gets. Anything it leaves outside /seu dies with this sandbox.
+ * Installs the dependencies listed in the seu config
  */
 async function install(
     image: string,
@@ -215,8 +199,7 @@ async function install(
     hostM2Wanted: boolean,
     onAbort: () => Promise<void>,
 ): Promise<void> {
-    const steps = config.image.preInstall;
-    const script = config.install.script;
+    const steps = config.install;
 
     LOG.step('Host Maven repository');
     const hostM2 = hostRepository(hostM2Wanted);
@@ -265,30 +248,17 @@ async function install(
         LOG.step(`Preparing ${WORK_DIR}`);
         await prepareWork(sandbox);
 
-        // Before anything that runs a project tool: pre-install's Maven steps
-        // and the script both expect the project's JDK and Maven on PATH.
-        await installToolchain(sandbox, config);
-
-        // dockerd is the slow part of the boot. Pulling images needs it; the
-        // script gets it unconditionally, because a build command is opaque to
-        // us, and the ones that want Docker (Testcontainers, buildpacks, a
-        // compose file started by a test) fail in ways that point anywhere but
-        // at a missing daemon. Only a profile that just resolves Maven
-        // artifacts goes without.
-        if (script !== undefined || steps.some((s) => s.type === 'docker' || s.type === 'docker-compose')) {
+        // dockerd is the slow part of the boot, so only a profile that needs
+        // it gets it.
+        if (needsDocker(steps)) {
             LOG.step('Starting dockerd in the install sandbox');
             dockerd = await startDockerd(sandbox);
         }
 
-        if (steps.length > 0) {
-            LOG.step('Pre-Install');
-            await runPreInstall(sandbox, steps);
-        }
-
-        if (script === undefined) {
-            LOG.debug(`no install.script in ${CONFIG_FILE}`);
+        if (steps.length === 0) {
+            LOG.debug('no install steps');
         } else {
-            await runInstallScript(sandbox, script);
+            await runInstall(sandbox, steps);
         }
 
         // Before the sandbox -- and with it /host-m2 -- goes away. What was just
@@ -325,49 +295,4 @@ function keepLogs(sandboxName: string): void {
     } catch {
         // Diagnostics only; never the reason a failure report goes missing.
     }
-}
-
-async function runInstallScript(sandbox: Sandbox, script: string): Promise<void> {
-    LOG.step('Running install.script');
-    LOG.debug(`${WORK_DIR}$ ${script}`);
-    warnOnRootWork(script);
-
-    const result = await exec(sandbox, {
-        // The script IS a shell command -- see InstallScript in
-        // src/config/config.ts. It runs as `seu`, in a sandbox that is
-        // destroyed right after, and never on the host.
-        cmd: 'bash',
-        args: ['-lc', script],
-        user: 'seu',
-        cwd: WORK_DIR,
-        timeoutMs: INSTALL_TIMEOUT_MS,
-        stream: true,
-    });
-
-    if (!result.ok) {
-        die(
-            result.timedOut
-                ? `install.script did not finish within ${INSTALL_TIMEOUT_MS / 60_000} minutes`
-                : `install.script failed (exit ${result.code})`,
-        );
-    }
-    LOG.ok('install.script finished');
-}
-
-/**
- * The install runs as `seu`, in a sandbox whose rootfs is thrown away. A step
- * that wants root is therefore wrong twice over, and the way it announces
- * itself -- a sudo password prompt on a VM with no password -- says neither.
- *
- * A warning rather than a refusal: the script is the project's business, and a
- * `docker run` of something that happens to contain the word apt-get is nobody
- * else's. But it names the fix, which is the part that is hard to guess.
- */
-function warnOnRootWork(script: string): void {
-    const needsRoot = /\b(sudo|apt-get|apt-key|install-deps)\b/.exec(script);
-    if (needsRoot === null) return;
-
-    LOG.warn(`install.script contains \`${needsRoot[0]}\`, which wants root`);
-    LOG.warn('    this runs as `seu`, and anything outside /seu dies with this sandbox');
-    LOG.warn('    system packages belong in vm/Dockerfile -- they are baked into the base image');
 }

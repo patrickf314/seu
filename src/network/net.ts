@@ -1,5 +1,5 @@
 import type { NetworkPolicyBuilder } from "microsandbox";
-import { sdk } from "../microsandbox/microsandboxSdk.ts";
+import { sdk } from "../msb/sdk.ts";
 
 const ALLOWED_DOMAINS = [
   "repo.maven.apache.org",

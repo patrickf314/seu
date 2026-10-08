@@ -7,10 +7,11 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
-import { run as spawn, runOk } from '../../host.ts';
+import { execOnHost } from '../../host/exec.ts';
 import { type Project, resolveInstance, resolveProject, takeInstanceName } from '../../config/project.ts';
 import { requireSession } from '../../session.ts';
-import { exec, WORK_DIR } from '../../sandbox.ts';
+import { WORK_DIR } from '../../sandbox.ts';
+import { execInSandbox } from '../../msb/exec.ts';
 
 /** Where the bundle is written inside the guest before it is copied out. */
 const GUEST_BUNDLE = '/tmp/seu.bundle';
@@ -29,10 +30,9 @@ export async function run(argv: string[]): Promise<void> {
     mkdirSync(instance.stateDir, { recursive: true });
 
     LOG.step(`Bundling ${WORK_DIR}`);
-    const bundled = await exec(session.sandbox, {
+    const bundled = await execInSandbox(session.sandbox, {
         cmd: 'bash',
         args: ['-lc', `cd ${WORK_DIR} && git bundle create ${GUEST_BUNDLE} --all`],
-        user: 'seu',
         timeoutMs: BUNDLE_TIMEOUT_MS,
         stream: true,
     });
@@ -59,15 +59,23 @@ export async function run(argv: string[]): Promise<void> {
  * developer has configured on it.
  */
 async function wireRemote(project: Project, remote: string, bundle: string): Promise<void> {
-    const existing = await spawn('git', ['-C', project.root, 'remote', 'get-url', remote]);
+    const existing = await execOnHost({ cmd: 'git', args: ['-C', project.root, 'remote', 'get-url', remote] });
     const subcommand = existing.code === 0 ? 'set-url' : 'add';
 
-    await runOk(
-        'git',
-        ['-C', project.root, 'remote', subcommand, remote, bundle],
-        `could not point the remote '${remote}' at ${bundle}`,
-    );
-    await runOk('git', ['-C', project.root, 'fetch', remote], 'git fetch from the bundle failed');
+
+    const r = await execOnHost({ cmd: 'git', args: ['-C', project.root, 'remote', subcommand, remote, bundle] });
+
+    if (r.code !== 0) {
+        const detail = (r.stderr || r.stdout).trim().split('\n').slice(-5).join('\n    ');
+        die(detail ? `could not point the remote '${remote}' at ${bundle}\n    ${detail}` : `could not point the remote '${remote}' at ${bundle}`);
+    }
+
+    const r2 = await execOnHost({ cmd: 'git', args: ['-C', project.root, 'fetch', remote] });
+    if (r2.code !== 0) {
+        const detail = (r2.stderr || r2.stdout).trim().split('\n').slice(-5).join('\n    ');
+        die(detail ? `git fetch from the bundle failed\n    ${detail}` : `git fetch from the bundle failed`);
+    }
+
     LOG.ok(`${remote} -> ${bundle}`);
 }
 
@@ -86,7 +94,7 @@ async function review(project: Project, remote: string): Promise<void> {
         LOG.info(line);
     }
 
-    const branches = await spawn('git', ['-C', project.root, 'branch', '-r', '--list', `${remote}/*`]);
+    const branches = await execOnHost({ cmd: 'git', args: ['-C', project.root, 'branch', '-r', '--list', `${remote}/*`] });
     const fetched = branches.stdout.trim();
     if (fetched === '') return;
 

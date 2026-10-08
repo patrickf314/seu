@@ -21,8 +21,9 @@ piece to move out.
 - Node 22+. `seu help` runs with nothing installed; `seu start` needs the
   microsandbox SDK, which `npm install` (in a checkout) or the package's own
   dependency (when installed) provides
-- Docker on the host — only for building the base image in `seu start`;
-  sessions never touch it
+- The image the sandboxes run on in microsandbox's image store — by default
+  `seu-vm-image` (`msb image ls`). seu neither builds nor loads it; `vm/` holds
+  the Dockerfile it is built from
 - Artifact-repository credentials for whatever the project needs, either in
   `~/.m2/settings.xml` or as `GITHUB_ACTOR` / `GITHUB_TOKEN`
 
@@ -57,26 +58,24 @@ stops before that):
 Installing — pulling the Docker images, resolving the Maven world, the first full
 build — is the slow part of a SEU, and it produces the same volume for every SEU
 of a project. So it happens **once per project**, into a volume of its own,
-`seu-template-<image.tag>`, and every new SEU's volume starts as a copy of it.
+`seu-template-<worktree directory name>`, and every new SEU's volume starts as a copy of it.
 
 The copy is an **APFS clone** of the volume's disk image (`disk.raw`, one raw
 ext4 file): it takes milliseconds and no disk space until the two diverge. The
 new SEU's `/work` is then moved onto *this* worktree with git — its branch, its
 commit, its uncommitted changes — keeping the template's git-ignored build
 outputs (`target/`, `node_modules`), so the first build is incremental. All
-worktrees of a repository share the template, since they share `image.tag`.
+SEUs of a worktree share the template, which is named after its directory.
 `seu list` shows the templates under the SEUs.
 
-The template is built by the first `seu start` that needs one: base image (if
-not loaded), then a throwaway install sandbox with wide egress over the
-template volume, running `mise install` for the project's `mise.toml`, the
-pre-install and `install.script`. A build that
+The template is built by the first `seu start` that needs one: a throwaway
+install sandbox with wide egress over the template volume, running the
+project's `install` steps in order. A build that
 fails or is interrupted removes its half-built volume.
 
-`seu start --reinstall` rebuilds the base image and the template from the
-current worktree and recreates this SEU from the new template — after a change
-to `vm/Dockerfile`, `mise.toml`, `image.pre-install`, `install.script`, or a new
-dependency. It replaces the SEU's volume, so it first checks `/work` for work the
+`seu start --reinstall` rebuilds the template from the current worktree and
+recreates this SEU from the new template — after a change to `image`,
+`mise.toml`, the `install` steps, or a new dependency. It replaces the SEU's volume, so it first checks `/work` for work the
 host does not have and refuses unless `--force`. Other SEUs keep their volumes:
 clones are independent. `--no-host-m2` turns off
 [borrowing the host's Maven repository](#borrowing-the-hosts-maven-repository)
@@ -87,7 +86,7 @@ for the install.
 Every SEU has a name, by default the worktree's directory name. Pass another
 one to get a second, independent sandbox of the same checkout — its own session,
 its own named volume (so its own `/work`, `~/.m2` and Docker images) and its own
-port forwards. Only the base image is shared.
+port forwards. Only the image and the template are shared.
 
 ```bash
 ./seu/bin/seu start review          # a second SEU next to the default one
@@ -144,14 +143,12 @@ repository**, not in seu:
 
 ```json
 {
-  "image": {
-    "tag": "website-react",
-    "mise-toml": "./mise.toml",
-    "pre-install": [{ "type": "docker", "image": "postgres:18" }]
-  },
-  "install": {
-    "script": "mvn clean install -DskipTests -T1C"
-  }
+  "image": "seu-vm-image",
+  "install": [
+    { "type": "mise", "toml": "./mise.toml" },
+    { "type": "docker", "image": "postgres:18" },
+    { "type": "script", "script": "mvn clean install -DskipTests -T1C" }
+  ]
 }
 ```
 
@@ -159,10 +156,8 @@ Every key is optional, and so is the file:
 
 | key | default | what it does |
 | --- | --- | --- |
-| `image.tag` | the worktree's directory name | names the project's template, `seu-template-<image.tag>`. The base image itself is shared by every project: `seu:<hash of vm/*>`. |
-| `image.mise-toml` | `./mise.toml` | the toolchain `seu start` installs into the template (`mise install`, into `/seu/mise` on the volume) before the pre-install. A project without one gets no managed JDK/Maven; a configured path that does not exist is an error. |
-| `image.pre-install` | nothing | what `seu start` fetches into the template volume while it still has egress: docker images, a compose file's images, Maven artifacts. See `seu help start`. |
-| `install.script` | nothing | what `seu start` runs in the template's `/work` to make the checkout buildable. See below. |
+| `image` | `seu-vm-image` | the microsandbox image every sandbox of the project runs on. It must already be in msb's image store; seu never builds or loads it. |
+| `install` | nothing | the steps `seu start` runs into the template volume, in order, while it still has egress. See below and `seu help start`. |
 | `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
 | `secrets` | nothing | env vars for the session shell, as 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
 
@@ -171,7 +166,7 @@ The file is **data, never code**: it is parsed as JSON and validated against a
 a host command, and unknown keys are rejected rather than ignored — a typo that
 silently produced a toolchain-less image is exactly the failure this prevents.
 The repository seu sandboxes is not a repository seu trusts. The one exception is
-`install.script`, which is a command by design — and which therefore never
+a `script` install step, which is a command by design — and which therefore never
 reaches the host at all.
 
 ### Secrets from 1Password
@@ -204,13 +199,23 @@ readable by anything in the shell — Claude included.
 The profile comes from the repository, so every reference it resolves is
 printed: which of your 1Password items a repository asks for is yours to see.
 
-### `install.script`, and why the session is not the one running it
+### Install steps
 
-`seu start` runs this command and then leaves the session VM running with egress
+| step | what it does |
+| --- | --- |
+| `{ "type": "mise", "toml": "./mise.toml" }` | installs the toolchain into the template (`mise install`, into `/seu/mise` on the volume). At most one; without it the project gets no managed JDK/Maven. A path that does not exist is an error. Put it before the steps that need its tools. |
+| `{ "type": "docker-compose", "compose": "local/docker-compose.yml" }` | pulls every image the compose file names (services it builds are skipped) |
+| `{ "type": "docker", "image": "postgres:18" }` | pulls one image |
+| `{ "type": "maven", "artifact": "g:a:v" }` | resolves one artifact and its dependencies into `~/.m2` |
+| `{ "type": "script", "script": "mvn clean install -DskipTests" }` | runs a shell command as `seu` in `/work` to make the checkout buildable |
+
+### Install scripts, and why the session is not the one running them
+
+`seu start` runs the install steps and then leaves the session VM running with egress
 narrowed to Anthropic. It cannot do both in one sandbox: microsandbox fixes a
 network policy at creation, and an install has to resolve dependencies. So
-`start` runs it in a **throwaway sandbox under the build policy** — right after
-the pre-install, as `seu`, in `/work`, with a docker daemon up — over the
+`start` runs them in a **throwaway sandbox under the build policy** — in the order
+of the `install` steps, as `seu`, in `/work`, with a docker daemon up — over the
 [template](#the-template) volume, destroys that sandbox, and clones the template
 into the SEU's own volume, which the session is created over. What the install
 wrote into `/seu` (`/work`, `~/.m2` and `~/.cache` are symlinks into it) is
@@ -285,7 +290,7 @@ npm run build             # bundle src/ -> dist/cli.js (vite)
 `npm run build` is only needed for the installed form; a checkout runs the
 TypeScript directly, so an edit takes effect immediately. The bundle inlines
 everything except **microsandbox** — a native addon with a per-platform
-runtime, which cannot be inlined. `src/microsandbox/microsandboxSdk.ts` imports it lazily, so `seu help`
+runtime, which cannot be inlined. `src/msb/sdk.ts` imports it lazily, so `seu help`
 works with no `node_modules` at all and a command that does need it fails with
 one sentence instead of a resolution stack trace. `lib/`, `vm/` and `config/`
 stay on disk and are found through `SEU_ROOT`, which is located by walking up
@@ -359,8 +364,8 @@ Symlinks baked into `vm/Dockerfile` point the well-known paths into it:
 Because those are symlinks, `du -sh ~/.m2` and `find /work` report nothing
 useful — measure `/seu/m2` and `/seu/work` instead.
 
-**This is why every `apt-get install` lives in `vm/Dockerfile`** and not in
-`install.script`. Anything written outside `/seu` is thrown away with the
+**This is why every `apt-get install` lives in the image** (`vm/Dockerfile` for
+`seu-vm-image`) and not in a `script` step. Anything written outside `/seu` is thrown away with the
 sandbox, and the install runs as `seu`, so a step that needs root cannot run
 there in the first place — it announces itself as a `sudo` password prompt on a
 VM that has no password. `seu start` warns when it spots `sudo`, `apt-get` or
@@ -371,7 +376,7 @@ Playwright is the standing example, and it splits in two:
 | | where | why |
 | --- | --- | --- |
 | `install-deps` — the OS libraries | `vm/Dockerfile` | apt-get, needs root, lives outside `/seu` |
-| `install <browsers>` — the binaries | `install.script` | land in `~/.cache/ms-playwright`, which is on the volume |
+| `install <browsers>` — the binaries | a `script` install step | land in `~/.cache/ms-playwright`, which is on the volume |
 
 So CI's `mvn exec:java -Dexec.args="install-deps"` becomes
 `-Dexec.args="install chromium firefox"` in a seu profile; the image already
@@ -516,7 +521,7 @@ The viewer ships inside the Playwright jar, so it is started with
 trace — the test module whose `target/` it was written to — and says which one
 it picked. Only when there is none does it stop, with a clear error rather than
 a confusing Maven failure. It runs offline, so the exec plugin and Playwright must
-already be in `~/.m2` — an `install.script` that builds the module sees to that.
+already be in `~/.m2` — a `script` install step that builds the module sees to that.
 
 Two details worth knowing, both verified against the driver bundle rather than
 assumed:
@@ -958,7 +963,7 @@ lib/common.sh               the bash half's identity, volumes, dockerd
     conf-get.py             reads one key out of .seu/config.json, for bash
     maven-settings.py       generates the in-VM settings.xml
     claude-config.py        projects your ~/.claude setup onto the VM
-vm/Dockerfile               base image (FROM jdxcode/mise:debian), shared by all
+vm/Dockerfile               seu-vm-image (FROM jdxcode/mise:debian), shared by all
                             projects: mise + docker + Claude Code + ccstatusline
    dockerd-run.sh           foreground dockerd (see notes above)
    session-init.sh          clone /src -> /work

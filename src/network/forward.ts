@@ -25,8 +25,9 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, 
 import { join } from 'node:path';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
-import { run, sleep } from '../host.ts';
-import { sdk } from '../microsandbox/microsandboxSdk.ts';
+import { sleep } from '../host.ts';
+import { execOnHost } from '../host/exec.ts';
+import { sdk } from '../msb/sdk.ts';
 import { STATE_ROOT, type Instance } from '../config/project.ts';
 
 /**
@@ -217,7 +218,7 @@ export async function prepareTunnels(sandbox: string): Promise<Tunnels> {
     const key = await sshKey();
     const msb = await msbPath();
 
-    const authorize = await run(msb, ['ssh', 'authorize', '--file', `${key}.pub`]);
+    const authorize = await execOnHost({ cmd: msb, args: ['ssh', 'authorize', '--file', `${key}.pub`] });
     if (authorize.code !== 0) die(`msb ssh authorize failed for ${key}.pub`);
 
     return { sandbox, sshArgs: sshArgs(sandbox, key, msb) };
@@ -229,7 +230,7 @@ async function sshKey(): Promise<string> {
     if (existsSync(key)) return key;
 
     mkdirSync(dir, { recursive: true });
-    const generated = await run('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', 'seu', '-f', key, '-q']).catch(
+    const generated = await execOnHost({ cmd: 'ssh-keygen', args: ['-t', 'ed25519', '-N', '', '-C', 'seu', '-f', key, '-q'] }).catch(
         (err: Error) => die(`seu port needs OpenSSH: ${err.message}`),
     );
     if (generated.code !== 0) die(`could not generate the seu SSH key at ${key}`);
@@ -383,7 +384,7 @@ export function hostPortListening(bind: string, port: number): Promise<boolean> 
 
 /** Who is sitting on the port, when lsof can say. Diagnosis, never a check. */
 async function portHolder(port: number): Promise<string | undefined> {
-    const listing = await run('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']).catch(() => undefined);
+    const listing = await execOnHost({ cmd: 'lsof', args: ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'] }).catch(() => undefined);
     const line = listing?.stdout.split('\n')[1]?.trim().split(/\s+/);
     return line !== undefined && line.length > 1 ? `held by ${line[0]} (pid ${line[1]})` : undefined;
 }
