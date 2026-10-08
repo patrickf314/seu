@@ -25,7 +25,8 @@ import { LOG } from '../common/log.ts';
 import { SEU_ROOT } from '../config/project.ts';
 import { execInSandbox } from '../msb/exec.ts';
 
-const SETTINGS_PATH = '~/.m2/settings.xml';
+// $HOME, not ~: the path is used inside double quotes, where ~ does not expand.
+const SETTINGS_PATH = '$HOME/.m2/settings.xml';
 
 /** The repository id the generated settings declares. */
 const REPOSITORY_ID = 'seu-host-m2';
@@ -65,7 +66,8 @@ export function hostRepository(enabled: boolean): string | undefined {
 /**
  * Declare /host-m2 to the guest's Maven, by writing the settings it reads.
  *
- * Call before anything resolves. The document is generated rather than taken
+ * Call before anything resolves, but after the home is set up: before that the
+ * volume is empty and root-owned. The document is generated rather than taken
  * from the host's own settings.xml, which seu never reads: that file is where
  * credentials live, and nothing here needs one.
  */
@@ -74,7 +76,7 @@ export async function declareHostRepository(sandbox: Sandbox): Promise<void> {
         sandbox,
         settingsDocument('host-repository-settings.xml', { REPOSITORY_ID, HOST_REPOSITORY_MOUNT }),
     );
-    LOG.ok(`${REPOSITORY_ID} declared in ${SETTINGS_PATH}`);
+    LOG.ok(`${REPOSITORY_ID} declared in ~/.m2/settings.xml`);
 }
 
 /**
@@ -125,7 +127,7 @@ async function writeSettings(sandbox: Sandbox, document: string): Promise<void> 
         env: { SEU_SETTINGS_XML: document },
         timeoutMs: 60_000,
     });
-    if (!result.ok) LOG.warn(`could not write ${SETTINGS_PATH}`);
+    if (!result.ok) LOG.warn('could not write ~/.m2/settings.xml');
 }
 
 /**

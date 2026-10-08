@@ -159,6 +159,7 @@ Every key is optional, and so is the file:
 | `image` | `seu-vm-image` | the microsandbox image every sandbox of the project runs on. It must already be in msb's image store; seu never builds or loads it. |
 | `install` | nothing | the steps `seu start` runs into the template volume, in order, while it still has egress. See below and `seu help start`. |
 | `playwright.pom` | nothing | the module whose pom puts the Playwright Java client on the classpath; `seu playwright` runs the trace viewer through it. See [Playwright traces](#playwright-traces). |
+| `claudeSettings` | nothing | a Claude Code settings file in the project, e.g. `".seu/claude-settings.json"`. Copied to `~/.claude/settings.json` in the session on every `seu start`; without it the session runs on Claude Code's defaults. A path that does not exist is an error. |
 | `secrets` | nothing | env vars for the session shell, as 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
@@ -968,7 +969,6 @@ vm/Dockerfile               seu-vm-image (FROM jdxcode/mise:debian), shared by a
    dockerd-run.sh           foreground dockerd (see notes above)
    session-init.sh          clone /src -> /work
    warm.sh                  the whole `seu build` warm-up
-   claude-settings.json     the VM's own Claude settings, merged ON TOP of yours
 config/net-session.yaml     Anthropic-only egress
        net-build.yaml       wide egress, build phase only (bash half; the
                             TypeScript build uses src/net.ts)

@@ -40,6 +40,7 @@ import {
 } from '../../msb/sandbox.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { shell } from '../../msb/shell.ts';
+import { installClaudeSettings } from '../../claude/settings.ts';
 
 interface StartOptions {
     reinstall: boolean;
@@ -60,7 +61,7 @@ export async function run(argv: string[]): Promise<number> {
 
     const status = await sessionStatus(instance);
     if (!opts.reinstall && status !== 'absent') {
-        return enter(config, instance, await resume(instance, status), opts);
+        return enter(config, instance, await resume(config, instance, status), opts);
     }
 
     // Before anything is rebuilt: a reinstall replaces this SEU's volume, and
@@ -81,7 +82,7 @@ export async function run(argv: string[]): Promise<number> {
         // (`seu remove --keep-volume`): everything is still in there.
         LOG.step('Volume');
         LOG.ok(`reusing ${volume}`);
-        return enter(config, instance, await startSession(config.image, instance, false), opts);
+        return enter(config, instance, await startSession(config, instance, false), opts);
     }
 
     const template = await ensureTemplate(project, config, opts);
@@ -95,7 +96,7 @@ export async function run(argv: string[]): Promise<number> {
     await cloneVolume(template.volume, volume);
     LOG.ok(`${volume} (${Date.now() - started} ms)`);
 
-    return enter(config, instance, await startSession(config.image, instance, true), opts);
+    return enter(config, instance, await startSession(config, instance, true), opts);
 }
 
 function parseStartArgs(argv: string[]): StartOptions & InstanceOptions {
@@ -168,7 +169,7 @@ async function discardSeu(instance: Instance): Promise<void> {
  * `prepareWork` still runs after a resume: it is idempotent, and it is what
  * repairs a session whose first start was interrupted before ~/work was cloned.
  */
-async function resume(instance: Instance, status: SandboxStatus): Promise<Session> {
+async function resume(config: SeuConfig, instance: Instance, status: SandboxStatus): Promise<Session> {
     if (status === 'running') {
         LOG.step('Session sandbox');
         LOG.ok(`${sessionSandboxName(instance)} is already running (pass --reinstall to install again)`);
@@ -176,6 +177,7 @@ async function resume(instance: Instance, status: SandboxStatus): Promise<Sessio
 
     const session = await resumeSession(instance);
     if (session.resumed) await prepareWork(session.sandbox);
+    await installClaudeSettings(session.sandbox, config);
     return session;
 }
 
@@ -187,12 +189,12 @@ async function resume(instance: Instance, status: SandboxStatus): Promise<Sessio
  * `fromTemplate`: the volume is a fresh clone, whose ~/work still sits on the
  * worktree and commit the template was installed from.
  */
-async function startSession(image: string, instance: Instance, fromTemplate: boolean): Promise<Session> {
+async function startSession(config: SeuConfig, instance: Instance, fromTemplate: boolean): Promise<Session> {
     const name = sessionSandboxName(instance);
     LOG.step(`Creating ${name} (egress: Anthropic only)`);
     const sandbox = await createSandbox({
         name,
-        image: image,
+        image: config.image,
         project: instance.project,
         volume: volumeName(instance.name),
         network: { policy: await sessionNetworkPolicy(), strict: true },
@@ -204,6 +206,7 @@ async function startSession(image: string, instance: Instance, fromTemplate: boo
     LOG.step(`Preparing ${WORK_DIR}`);
     await prepareWork(sandbox);
     if (fromTemplate) await syncWorkToSource(sandbox);
+    await installClaudeSettings(sandbox, config);
 
     LOG.ok(`${name} is running with the session network policy`);
     return { name, sandbox, resumed: false };

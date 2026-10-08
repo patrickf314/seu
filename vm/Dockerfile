@@ -76,7 +76,6 @@ RUN curl -fsSL https://mise.run | MISE_VERSION=${MISE_VERSION} MISE_INSTALL_PATH
 RUN useradd --create-home --shell /bin/bash seu \
  && usermod -aG docker seu \
  && mkdir -p /home/seu/work /home/seu/.m2 /home/seu/.cache /home/seu/.config /home/seu/.local/share /home/seu/.claude
-COPY claude-settings.json /home/seu/.claude/settings.json
 RUN chown -R seu:seu /home/seu \
  && mkdir -p /opt/seu \
  && cp -a /home/seu /opt/seu/home-skel

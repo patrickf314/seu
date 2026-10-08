@@ -321,11 +321,11 @@ async function install(
     process.once('SIGTERM', onSignal);
 
     try {
-        if (hostM2 !== undefined) await declareHostRepository(sandbox);
-
         // Always: the template's ~/work is what every SEU's ~/work starts from.
         LOG.info(`preparing ${WORK_DIR}`);
         await prepareWork(sandbox);
+
+        if (hostM2 !== undefined) await declareHostRepository(sandbox);
 
         if (steps.length === 0) {
             LOG.debug('no install steps');

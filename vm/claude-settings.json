@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "deny": [
-    ]
-  },
-  "cleanupPeriodDays": 7
-}

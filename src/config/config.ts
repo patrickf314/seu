@@ -142,6 +142,12 @@ const SeuConfigSchema = z
          * 1Password on the host every time a shell is entered.
          */
         secrets: z.record(EnvName, SecretReference).optional(),
+
+        /**
+         * A Claude Code settings file in the project, copied to
+         * ~/.claude/settings.json on every `seu start`.
+         */
+        claudeSettings: ProjectPath.optional(),
     })
     .strict();
 
@@ -176,6 +182,12 @@ export interface SeuConfig {
      * names none.
      */
     readonly secrets: Readonly<Record<string, string>>;
+
+    /**
+     * Absolute path of the Claude Code settings to copy into the session, or
+     * undefined when the project names none.
+     */
+    readonly claudeSettings: string | undefined;
 }
 
 /**
@@ -194,6 +206,9 @@ export function loadConfig(project: Project): SeuConfig {
         install: (config.install ?? []).map(step => validateInstallStep(project, step)),
         ports: config.ports ?? [],
         secrets: config.secrets ?? {},
+        claudeSettings: config.claudeSettings === undefined
+            ? undefined
+            : projectFile(project, 'claudeSettings', config.claudeSettings),
     };
 }
 
@@ -233,12 +248,19 @@ function templateName(project: Project): string {
 
 function validateInstallStep(project: Project, step: InstallStep): InstallStep {
     if (step.type === 'mise') {
-        const path = join(project.root, step.toml.replace(/^\.\//, ''));
-        if (!existsSync(path) || !statSync(path).isFile()) {
-            die(`${project.configFile}: install mise step: ${step.toml} does not exist`);
-        }
-        return { ...step, toml: path };
+        return { ...step, toml: projectFile(project, 'install mise step', step.toml) };
     }
 
     return step;
+}
+
+/**
+ * The absolute path of a file the config names, which has to exist.
+ */
+function projectFile(project: Project, what: string, file: string): string {
+    const path = join(project.root, file.replace(/^\.\//, ''));
+    if (!existsSync(path) || !statSync(path).isFile()) {
+        die(`${project.configFile}: ${what}: ${file} does not exist`);
+    }
+    return path;
 }
