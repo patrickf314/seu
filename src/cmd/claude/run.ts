@@ -1,9 +1,3 @@
-// The `seu claude` flow: find the session, give it a Docker daemon, hand the
-// terminal to claude.
-//
-// Kept apart from the command const in src/cmd/claude/index.ts so that loading
-// the command set does not load the microsandbox SDK.
-
 import { LOG } from '../../common/log.ts';
 import { type Instance, type Project, resolveInstance, resolveProject } from '../../config/project.ts';
 import { resumeSession } from '../../msb/session.ts';
@@ -26,9 +20,8 @@ export async function run(argv: string[]): Promise<number> {
     const instance = resolveInstance(project, name);
     logMetadata(project, instance);
 
+    LOG.step(`Claude in ${instance.name}`);
     const session = await resumeSession(instance);
-
-    LOG.step(`Claude in ${session.name}`);
     return await claude(config, session, claudeArgs);
 }
 

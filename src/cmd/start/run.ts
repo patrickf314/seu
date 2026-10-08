@@ -145,10 +145,6 @@ async function checkUnsavedWork(instance: Instance, force: boolean): Promise<voi
     await guardUnsavedWork(instance, session.sandbox, force, 'reinstall');
 }
 
-/**
- * The project's template: the existing one while it still matches the config,
- * otherwise -- or always on --reinstall -- a freshly built one.
- */
 async function ensureTemplate(project: Project, config: SeuConfig, opts: StartOptions): Promise<Template> {
     const existing = await findTemplate(project, config);
 
