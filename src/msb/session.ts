@@ -1,8 +1,21 @@
 import type { Sandbox, SandboxStatus } from 'microsandbox';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
+import type { SeuConfig } from '../config/config.ts';
 import { type Instance, seuCommand } from '../config/project.ts';
-import { connectToSandbox, removeSandbox, sandboxStatus, startSandbox } from './sandbox.ts';
+import { sessionNetworkPolicy } from '../network/net.ts';
+import {
+    connectToSandbox,
+    createSandbox,
+    installSandboxName,
+    prepareWork,
+    removeSandbox,
+    sandboxReady,
+    sandboxStatus,
+    startSandbox,
+} from './sandbox.ts';
+import type { Template } from './template.ts';
+import { cloneVolume, removeVolume, volumeExists, volumeName } from './volume.ts';
 
 const SESSION_SANDBOX_PREFIX = 'seu-session-';
 
@@ -64,4 +77,66 @@ export async function resumeSession(instance: Instance): Promise<Session> {
 
 export async function clearSession(instance: Instance): Promise<void> {
     await removeSandbox(sessionSandboxName(instance));
+}
+
+export async function sessionVolumeExists(instance: Instance): Promise<boolean> {
+    return volumeExists(volumeName(instance.name));
+}
+
+/**
+ * Whether there is anything of this SEU left: its session or its volume.
+ */
+export async function sessionExists(instance: Instance): Promise<boolean> {
+    return (await sessionStatus(instance)) !== 'absent' || (await sessionVolumeExists(instance));
+}
+
+/**
+ * The SEU's volume as a clone of the template's.
+ */
+export async function cloneSessionVolume(instance: Instance, template: Template): Promise<void> {
+    const volume = volumeName(instance.name);
+    const started = Date.now();
+    await cloneVolume(template.volume, volume);
+    LOG.ok(`${volume} (${Date.now() - started} ms)`);
+}
+
+/**
+ * The session sandbox itself: the SEU's volume, the image, the narrowed policy,
+ * and a lifetime of its own -- it is detached, so it stays up when the command
+ * creating it returns.
+ */
+export async function createSession(instance: Instance, config: SeuConfig): Promise<Session> {
+    const name = sessionSandboxName(instance);
+    const sandbox = await createSandbox({
+        name,
+        image: config.image,
+        project: instance.project,
+        volume: volumeName(instance.name),
+        network: { policy: await sessionNetworkPolicy(), strict: true },
+        detached: true,
+    });
+
+    await sandboxReady(sandbox);
+    LOG.ok(`${name} is running with the session network policy`);
+    return { name, sandbox, resumed: false };
+}
+
+/**
+ * The seu home and ~/work of the session. Idempotent.
+ */
+export async function prepareSessionWork(session: Session): Promise<void> {
+    await prepareWork(session.sandbox);
+}
+
+/**
+ * The SEU's session, any leftover install sandbox and its volume.
+ */
+export async function discardSession(instance: Instance): Promise<void> {
+    const session = sessionSandboxName(instance);
+    const volume = volumeName(instance.name);
+
+    await removeSandbox(installSandboxName(instance));
+    await clearSession(instance);
+    await removeVolume(volume);
+    LOG.ok(`removed ${session} and ${volume}`);
 }
