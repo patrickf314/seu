@@ -1,13 +1,12 @@
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import type { SeuConfig } from '../config/config.ts';
 import type { Session } from './session.ts';
-import { resolveSecrets } from '../config/secrets.ts';
 import { WORK_DIR } from '../common/constants.ts';
 import { startDockerd } from './sandbox.ts';
 import { LOG } from '../common/log.ts';
 
 /**
- * Give the session a Docker daemon and the profile's secrets, and hand the
+ * Give the session a Docker daemon, and hand the
  * terminal over, until the shell ends. Also how `seu start` finishes.
  */
 export async function shell(config: SeuConfig, session: Session): Promise<number> {
@@ -28,8 +27,6 @@ export async function claude(config: SeuConfig, session: Session, args: readonly
 }
 
 async function attachLoginShell(config: SeuConfig, session: Session, bashArgs: string[]): Promise<number> {
-    const secrets = await resolveSecrets(config);
-
     LOG.step('Docker');
     const dockerd = await dockerDaemon(session.sandbox);
 
@@ -38,7 +35,6 @@ async function attachLoginShell(config: SeuConfig, session: Session, bashArgs: s
             .args(bashArgs)
             .user('seu')
             .cwd(WORK_DIR)
-            .envs(secrets)
         );
     } finally {
         // Explicit, rather than left to process exit: the handle IS the daemon's

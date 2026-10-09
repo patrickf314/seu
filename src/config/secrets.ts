@@ -1,10 +1,11 @@
 // `secrets` from the project profile: 1Password references, resolved on the
 // host with the `op` CLI.
 //
-// Resolved every time a shell is entered and handed to that shell's
-// environment only -- never written to the sandbox's disk, the volume or its
-// config, so a stopped session holds nothing and a rotated item is picked up by
-// the next `seu shell`.
+// Resolved when the session sandbox is created and registered as microsandbox
+// secrets: the guest sees a placeholder in the environment, and the real value
+// is only substituted into requests to the Anthropic hosts. It never enters
+// the VM, its disk or the volume; a rotated item is picked up by the next
+// `seu start --reinstall` or a recreated session.
 
 import { execOnHost } from '../host/exec.ts';
 import { LOG } from '../common/log.ts';

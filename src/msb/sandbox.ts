@@ -51,6 +51,15 @@ export interface SandboxSpec {
      */
     readonly hostRepository?: string | undefined;
     /**
+     * Env var name to resolved value. Registered as microsandbox secrets: the
+     * guest only ever sees a placeholder, which the network layer swaps for the
+     * real value in requests to `secretHosts` -- so the value itself never
+     * enters the VM.
+     */
+    readonly secrets?: Readonly<Record<string, string>> | undefined;
+    /** The hosts allowed to receive the secrets' real values. */
+    readonly secretHosts?: readonly string[] | undefined;
+    /**
      * Outlive this process. True for the session, which has to still be there
      * when `seu start` returns; false for a throwaway sandbox, which must not.
      */
@@ -92,6 +101,16 @@ export async function createSandbox(spec: SandboxSpec): Promise<Sandbox> {
 
     if (spec.hostRepository !== undefined) {
         builder.volume(HOST_REPOSITORY_MOUNT, m => m.bind(spec.hostRepository).readonly());
+    }
+
+    for (const [name, value] of Object.entries(spec.secrets ?? {})) {
+        builder.secret(s => {
+            s.env(name).value(value);
+            for (const host of spec.secretHosts ?? []) {
+                s.allow(host);
+            }
+            return s;
+        });
     }
 
     return builder.create();

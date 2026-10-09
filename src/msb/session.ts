@@ -3,7 +3,8 @@ import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
 import type { SeuConfig } from '../config/config.ts';
 import { type Instance, seuCommand } from '../config/project.ts';
-import { sessionNetworkPolicy } from '../network/net.ts';
+import { SESSION_DOMAINS, sessionNetworkPolicy } from '../network/net.ts';
+import { resolveSecrets } from '../config/secrets.ts';
 import {
     connectToSandbox,
     createSandbox,
@@ -144,6 +145,7 @@ export async function cloneSessionVolume(instance: Instance, config: SeuConfig, 
  */
 export async function createSession(instance: Instance, config: SeuConfig): Promise<Session> {
     const name = sessionSandboxName(instance);
+    const secrets = await resolveSecrets(config);
     const sandbox = await createSandbox({
         name,
         image: config.image,
@@ -151,6 +153,8 @@ export async function createSession(instance: Instance, config: SeuConfig): Prom
         volume: sessionVolumeName(instance),
         network: { policy: await sessionNetworkPolicy(), strict: true },
         resources: config.resources,
+        secrets,
+        secretHosts: SESSION_DOMAINS,
         detached: true,
     });
 

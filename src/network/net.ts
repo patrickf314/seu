@@ -9,7 +9,7 @@ import { sdk } from "../msb/sdk.ts";
  * the session needs has to be in the named volume by the time `seu start` has
  * finished its install sandbox; there is no second chance in here.
  */
-const SESSION_DOMAINS = [
+export const SESSION_DOMAINS = [
   "api.anthropic.com", // inference, WebFetch safety check, feature flags
   "claude.ai", // claude.ai account authentication
   "claude.com", // sign-in redirect

@@ -166,7 +166,7 @@ Every key is optional, and so is the file:
 | `resources.rootDiskMiB` | `20480` | root disk of every sandbox, in MiB. |
 | `resources.volumeSizeMiB` | `20480` | size of a newly created volume, in MiB. A SEU cloned from the template keeps the template's size, so a change only takes effect with `seu start --reinstall`. |
 | `resources.idleTimeoutSecs` | `3600` | how long a sandbox may sit idle before microsandbox stops it. |
-| `secrets` | nothing | env vars for the session shell, as 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
+| `secrets` | nothing | env vars for the session, as secrets from 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
 
 The file is **data, never code**: it is parsed as JSON and validated against a
 [zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches
@@ -190,18 +190,18 @@ reaches the host at all.
 }
 ```
 
-Every `seu start` and `seu shell` resolves them on the host with `op read`
+When `seu start` creates the session it resolves them on the host with `op read`
 (the [1Password CLI](https://developer.1password.com/docs/cli/), signed in or
-unlocked through the desktop app) and passes them to that one shell's
-environment. They are never written into the sandbox, its volume or its config:
-a stopped session holds nothing, and a rotated item is picked up by the next
-shell. A reference that cannot be read is a warning, and the shell starts
-without it.
+unlocked through the desktop app) and registers them as microsandbox secrets.
+The shell sees only a placeholder in the environment variable; the real value
+is substituted into requests to the session's Anthropic hosts and never enters
+the VM. A rotated item is picked up when the session is created again. A
+reference that cannot be read is a warning, and the session starts without it.
 
 For Claude Code, `claude setup-token` on the host prints a long-lived OAuth
 token to store in 1Password; `CLAUDE_CODE_OAUTH_TOKEN` then takes precedence
-over the copied login. Unlike that login, an environment variable **is**
-readable by anything in the shell — Claude included.
+over the copied login. What the shell can read is the placeholder, not the
+token.
 
 The profile comes from the repository, so every reference it resolves is
 printed: which of your 1Password items a repository asks for is yours to see.
