@@ -20,28 +20,16 @@ const SETTINGS_PATH = '$CLAUDE_CONFIG_DIR/settings.json';
 const STATUS_LINE = { type: 'command', command: 'ccstatusline', padding: 0 };
 
 /**
- * The settings text to install: the file's own, plus the status line when it
- * names none.
- */
-function withStatusLine(text: string | undefined, source: string): string {
-    let settings: Record<string, unknown> = {};
-    if (text !== undefined) {
-        try {
-            settings = JSON.parse(text);
-        } catch (error) {
-            throw new Error(`${source} is not valid JSON: ${(error as Error).message}`);
-        }
-    }
-    return JSON.stringify({ statusLine: STATUS_LINE, ...settings }, null, 2) + '\n';
-}
-
-/**
  * Copy the configured settings (or just the status line) into the sandbox.
  */
 export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig, name: string): Promise<void> {
     await installStatusline(sandbox, config, name);
+
     const settings = config.claude.settings;
-    if (settings === undefined) LOG.debug('no claude.settings configured');
+    if (settings === undefined) {
+        LOG.debug('no claude.settings configured');
+    }
+
     const content = withStatusLine(
         settings === undefined ? undefined : readFileSync(settings, 'utf8'),
         settings ?? 'claude.settings',
@@ -106,4 +94,16 @@ async function installStatusline(sandbox: Sandbox, config: SeuConfig, name: stri
     } else {
         LOG.warn(`could not install ${label} to ~/.config/ccstatusline/settings.json`);
     }
+}
+
+function withStatusLine(text: string | undefined, source: string): string {
+    let settings: Record<string, unknown> = {};
+    if (text !== undefined) {
+        try {
+            settings = JSON.parse(text);
+        } catch (error) {
+            throw new Error(`${source} is not valid JSON: ${(error as Error).message}`);
+        }
+    }
+    return JSON.stringify({ statusLine: STATUS_LINE, ...settings }, null, 2) + '\n';
 }
