@@ -35,6 +35,8 @@ const DEFAULT_RESOURCES: Resources = {
  */
 const HOME_CLAUDE_DIR = '~/.claude/';
 
+const HOME_STATUSLINE_DIR = '~/.config/ccstatusline/';
+
 const ProjectPath = z
     .string()
     .refine((p) => !p.startsWith('/'), 'must be relative to the project')
@@ -47,6 +49,14 @@ const ClaudeSettingsPath = z
     .refine(
         (p) => p.startsWith(HOME_CLAUDE_DIR) || ProjectPath.safeParse(p).success,
         `must be relative to the project, or a file in ${HOME_CLAUDE_DIR}`,
+    );
+
+const StatuslinePath = z
+    .string()
+    .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'')
+    .refine(
+        (p) => p.startsWith(HOME_STATUSLINE_DIR) || ProjectPath.safeParse(p).success,
+        `must be relative to the project, or a file in ${HOME_STATUSLINE_DIR}`,
     );
 
 const PositiveInt = z.number().int().positive();
@@ -68,6 +78,11 @@ const ClaudeSchema = z
          * every `seu start`.
          */
         settings: ClaudeSettingsPath.optional(),
+
+        /**
+         * A ccstatusline config that replaces the image's default status line.
+         */
+        statusline: StatuslinePath.optional(),
 
         /**
          * Whether `seu claude` starts claude with
@@ -235,6 +250,12 @@ export interface ClaudeConfig {
     readonly settings: string | undefined;
 
     /**
+     * Absolute path of the ccstatusline config that replaces the default, or
+     * undefined to keep the image's.
+     */
+    readonly statusline: string | undefined;
+
+    /**
      * Whether `seu claude` passes --dangerously-skip-permissions.
      */
     readonly dangerouslySkipPermissions: boolean;
@@ -295,6 +316,9 @@ export function loadConfig(project: Project): SeuConfig {
             settings: config.claude?.settings === undefined
                 ? undefined
                 : claudeSettingsFile(project, config.claude.settings),
+            statusline: config.claude?.statusline === undefined
+                ? undefined
+                : statuslineFile(project, config.claude.statusline),
             dangerouslySkipPermissions: config.claude?.dangerouslySkipPermissions ?? true,
         },
     };
@@ -357,6 +381,16 @@ function claudeSettingsFile(project: Project, file: string): string {
         return existingFile(project, 'claude.settings', file, join(homedir(), file.slice(2)));
     }
     return projectFile(project, 'claude.settings', file);
+}
+
+/**
+ * A ccstatusline config in the project, or one in the host's ~/.config/ccstatusline.
+ */
+function statuslineFile(project: Project, file: string): string {
+    if (file.startsWith(HOME_STATUSLINE_DIR)) {
+        return existingFile(project, 'claude.statusline', file, join(homedir(), file.slice(2)));
+    }
+    return projectFile(project, 'claude.statusline', file);
 }
 
 function existingFile(project: Project, what: string, file: string, path: string): string {

@@ -96,7 +96,7 @@ export async function run(argv: string[]): Promise<number> {
         session = await createSession(instance, config);
 
         LOG.step(`Preparing ${WORK_DIR}`);
-        await prepareSession(config, session, fromTemplate);
+        await prepareSession(config, session, instance, fromTemplate);
     } else {
         LOG.step(`Resuming session ${instance.name}`);
         session = await resume(config, instance);
@@ -183,7 +183,7 @@ async function resume(config: SeuConfig, instance: Instance): Promise<Session> {
         LOG.ok(`${session.name} is already running (pass --reinstall to install again)`);
     }
 
-    await installClaudeSettings(session.sandbox, config);
+    await installClaudeSettings(session.sandbox, config, instance.name);
     return session;
 }
 
@@ -193,8 +193,8 @@ async function resume(config: SeuConfig, instance: Instance): Promise<Session> {
  * `fromTemplate`: the volume is a fresh clone, whose ~/work still sits on the
  * worktree and commit the template was installed from.
  */
-async function prepareSession(config: SeuConfig, session: Session, fromTemplate: boolean): Promise<void> {
+async function prepareSession(config: SeuConfig, session: Session, instance: Instance, fromTemplate: boolean): Promise<void> {
     await prepareSessionWork(session);
     if (fromTemplate) await syncWorkToSource(session.sandbox);
-    await installClaudeSettings(session.sandbox, config);
+    await installClaudeSettings(session.sandbox, config, instance.name);
 }
