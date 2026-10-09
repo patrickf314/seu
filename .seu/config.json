@@ -1,5 +1,8 @@
 {
   "secrets": {
     "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Token/password"
+  },
+  "claude": {
+    "settings": "~/.claude/settings.json"
   }
 }
