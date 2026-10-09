@@ -81,6 +81,37 @@ RUN chown -R seu:seu /home/seu \
  && cp -a /home/seu /opt/seu/home-skel
 # --- User (end) ---
 
+# --- Playwright browsers ---
+# Downloaded here, by the host's docker build, instead of in the install
+# sandbox: the downloads are large and kept failing there with ECONNRESET, and
+# every template rebuild repeated them.
+#
+# Into the home skeleton, so seu-home-init copies them into ~/.cache/ms-playwright
+# on the volume, where Playwright looks by default. On the volume rather than
+# behind PLAYWRIGHT_BROWSERS_PATH in the image, so a project whose Playwright
+# version differs can still `install` its own browsers and keep them.
+#
+# PLAYWRIGHT_VERSION must match the project's Playwright Java client: the
+# browser builds are per version, and a mismatch means the project's version
+# finds nothing here. --with-deps also installs the OS libraries, which needs
+# root and so cannot happen in the install sandbox either.
+#
+# playwright-core, fetched as a tarball the way ccstatusline is above, because
+# Ubuntu's `nodejs` package carries no npm. It stays in the image: the browsers
+# are registered against its path in .links, and a later `install` deletes
+# browsers whose registering package no longer exists.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_BROWSERS="chromium firefox"
+RUN mkdir -p /opt/playwright-core \
+ && curl -fsSL "https://registry.npmjs.org/playwright-core/-/playwright-core-${PLAYWRIGHT_VERSION}.tgz" \
+      | tar -xz -C /opt/playwright-core --strip-components=1 \
+ && apt-get update \
+ && PLAYWRIGHT_BROWSERS_PATH=/opt/seu/home-skel/.cache/ms-playwright \
+      node /opt/playwright-core/cli.js install --with-deps ${PLAYWRIGHT_BROWSERS} \
+ && chown -R seu:seu /opt/seu/home-skel/.cache \
+ && rm -rf /var/lib/apt/lists/*
+# --- Playwright browsers (end) ---
+
 # --- Docker storage ---
 # Pulled images in the home volume, so they survive a restart and are part of
 # the template every SEU is cloned from. In daemon.json rather than a dockerd
@@ -99,6 +130,8 @@ RUN chmod 0755 /usr/local/bin/seu-home-init.sh /usr/local/bin/dockerd-run.sh /us
 # project's mise.toml to $MISE_CONFIG_DIR. The shims on PATH rather than
 # `mise activate`, because an exec from the host is not an interactive shell.
 # A login shell's /etc/profile may reset PATH, so profile.d repeats it.
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: otherwise `Playwright.create()` installs
+# every browser, which fails offline in the session for any it does not have.
 ENV MISE_DATA_DIR=/home/seu/.local/share/mise \
     MISE_CONFIG_DIR=/home/seu/.config/mise \
     MISE_CACHE_DIR=/home/seu/.cache/mise \
@@ -106,6 +139,7 @@ ENV MISE_DATA_DIR=/home/seu/.local/share/mise \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     LANG=en_US.UTF-8
 RUN printf 'PATH="/home/seu/.local/share/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
 # --- Environment variables (end) ---

@@ -378,18 +378,10 @@ there in the first place — it announces itself as a `sudo` password prompt on 
 VM that has no password. `seu start` warns when it spots `sudo`, `apt-get` or
 `install-deps` in the script.
 
-Playwright is the standing example, and it splits in two:
-
-| | where | why |
-| --- | --- | --- |
-| `install-deps` — the OS libraries | `vm/Dockerfile` | apt-get, needs root, lives outside `/seu` |
-| `install <browsers>` — the binaries | a `script` install step | land in `~/.cache/ms-playwright`, which is on the volume |
-
-So CI's `mvn exec:java -Dexec.args="install-deps"` becomes
-`-Dexec.args="install chromium firefox"` in a seu profile; the image already
-carries what `install-deps` would have installed. The Dockerfile does that with
-Playwright's own CLI rather than a hand-written package list, because the Debian
-package names drift per release.
+Playwright is the standing example: `install-deps` is an apt-get install, so
+CI's `mvn exec:java -Dexec.args="install-deps"` has no place in a seu profile.
+The image carries both the OS libraries and the browsers instead — see
+[Playwright browsers](#playwright-browsers).
 
 It is a `--kind disk` (ext4) volume, not a directory volume: overlay2 cannot use
 a virtiofs mount (`failed to mount overlay: invalid argument`), and a Maven
@@ -462,43 +454,42 @@ session cannot resolve.
 ### Playwright browsers
 
 Browser binaries are per-platform, so there is nothing to reuse from the host —
-those are macOS builds and the guest is linux-arm64. They are downloaded during
-`seu start` into `~/.cache/ms-playwright`, which lives in the persistent volume.
+those are macOS builds and the guest is linux-arm64. `vm/Dockerfile` downloads
+them at image build time, together with their OS libraries
+(`install --with-deps`):
 
-```ini
-playwright_pom     = club/club-ui/club-ui-test/pom.xml
-playwright_browser = chromium
-playwright_browser = firefox
+```bash
+docker build -t seu-vm-image --build-arg PLAYWRIGHT_VERSION=1.63.0 \
+                           --build-arg PLAYWRIGHT_BROWSERS="chromium firefox" vm/
 ```
 
-`playwright_pom` names the module whose pom puts the Playwright client on the
-classpath — that is all `exec:java -Dexec.mainClass=com.microsoft.playwright.CLI`
-needs. Setting it is what enables the step; a project without Playwright omits
-both keys and nothing runs.
+They go into the home skeleton, so `seu-home-init` copies them into
+`~/.cache/ms-playwright` on the volume, where Playwright looks by default. The
+download happens on the host's network, not through the install sandbox, where
+the large browser zips kept dying with `ECONNRESET`; and a template rebuild no
+longer repeats it.
 
-It is stated, never guessed. Searching the poms for the dependency looks
-attractive and gets the common case right, but misses an inherited dependency
-from a parent or BOM — and the failure mode is silence now and an `ENOTFOUND` at
-test time, in a session that can no longer fix it. `playwright_browser` without
-`playwright_pom` is a hard error at preflight, not a warning after a 40-minute
-warm-up.
+**`PLAYWRIGHT_VERSION` must match the project's Playwright Java client.** Browser
+builds are per version (`chromium-<revision>`), and a client of another version
+finds nothing it can use. A project that cannot match keeps a `script` step with
+`-Dexec.args="install chromium firefox"`; its browsers land on the volume next to
+the image's and persist. With matching versions that step is a no-op and can go.
 
-**List every browser the suite launches.** The default is chromium alone.
+`/opt/playwright-core` stays in the image on purpose: Playwright registers the
+browsers against the installing package's path in `.links`, and a later
+`install` deletes browsers whose registering package no longer exists.
 
-This list is the only source of browsers, because the image sets
-`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Without that, `Playwright.create()` calls
-`Driver.ensureDriverInstalled(env, installBrowsers=true)`, which runs the driver's
-`install` with **no browser argument** — and a bare install means all three,
-whatever the test actually uses. Offline that is a guaranteed `ENOTFOUND
-cdn.playwright.dev` *before a browser is even chosen*, which reads like a network
-bug and is really an implicit install nobody asked for. The warm-up's explicit
-`CLI install <browsers>` is unaffected; the flag is only read on the `create()`
-path.
+**List every browser the suite launches.** The default is chromium and firefox.
 
-With it off, a missing browser fails at launch with `Executable doesn't exist`,
-which points at the real problem. The warm-up also checks
-`~/.cache/ms-playwright` afterwards and warns per browser, so a silent no-op in
-the install step cannot reach a session unnoticed.
+The image also sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Without it,
+`Playwright.create()` calls `Driver.ensureDriverInstalled(env, installBrowsers=true)`,
+which runs the driver's `install` with **no browser argument** — and a bare
+install means all of them, whatever the test actually uses. Offline that is a
+guaranteed `ENOTFOUND cdn.playwright.dev` *before a browser is even chosen*,
+which reads like a network bug and is really an implicit install nobody asked
+for. An explicit `CLI install <browsers>` is unaffected; the flag is only read on
+the `create()` path. With it off, a missing browser fails at launch with
+`Executable doesn't exist`, which points at the real problem.
 
 ### Playwright traces
 
