@@ -1,9 +1,6 @@
 #!/bin/bash
 # Prepare ~/work inside the VM. Runs as the `seu` user, idempotent.
-#
-# /src is the host worktree, mounted READ-ONLY. We never write there. ~/work is a
-# clone of it in the home volume, which persists across sandbox stop/start and
-# across the install-sandbox -> session-sandbox handoff.
+# /src is the host worktree, mounted READ-ONLY.
 set -uo pipefail
 
 WORK=/home/seu/work
@@ -31,8 +28,6 @@ fi
 
 if [[ -f /src/.git ]] && ! git -C /src rev-parse --git-dir >/dev/null 2>&1; then
   # /src/.git is a *file* pointing at a shared git dir that did not come along.
-  # Fail loudly: degrading to a history-less copy is how you lose work, because
-  # `seu pull` would then have nothing to bundle.
   echo "${c_red}error${c_off} /src has a git pointer file, but its target is not mounted:" >&2
   sed 's/^/    /' /src/.git >&2
   echo "    Re-create the sandbox:  seu clean && seu start" >&2
@@ -45,10 +40,8 @@ if ! git -C /src rev-parse --git-dir >/dev/null 2>&1; then
 fi
 
 echo "${c_dim}cloning /src -> $WORK ...${c_off}" >&2
-# --no-hardlinks: hardlinks into a read-only virtiofs mount are a trap.
 git clone --no-hardlinks /src "$WORK" 2>&1 | sed 's/^/    /' >&2 || exit 1
 
-# Carry over uncommitted work so the sandbox sees what you actually have.
 if ! git -C /src diff --quiet HEAD 2>/dev/null; then
   echo "${c_dim}applying uncommitted changes from /src${c_off}" >&2
   git -C /src diff HEAD | git -C "$WORK" apply --index - 2>/dev/null \
