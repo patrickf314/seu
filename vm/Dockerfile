@@ -54,12 +54,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
       > /usr/local/bin/ccstatusline \
  && chmod 0755 /usr/local/bin/ccstatusline \
  && ccstatusline --version
-# The default layout; `seu start` installs it (or claude.statusline) per session.
-# Pinned: nothing in a session could update it anyway.
-COPY ccstatusline-config.json /tmp/ccstatusline-config.json
-RUN mkdir -p /opt/seu \
- && jq '.installation.method = "pinned"' /tmp/ccstatusline-config.json > /opt/seu/ccstatusline-config.json \
- && rm /tmp/ccstatusline-config.json
 # --- Claude Code (end) ---
 
 # --- Mise ---

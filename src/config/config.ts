@@ -80,7 +80,7 @@ const ClaudeSchema = z
         settings: ClaudeSettingsPath.optional(),
 
         /**
-         * A ccstatusline config that replaces the image's default status line.
+         * A ccstatusline config that replaces the bundled default status line.
          */
         statusline: StatuslinePath.optional(),
 

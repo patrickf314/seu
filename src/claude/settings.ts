@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import type { SeuConfig } from '../config/config.ts';
 import { LOG } from '../common/log.ts';
 import { execInSandbox } from '../msb/exec.ts';
+import defaultStatusline from '../../config/ccstatusline-config.json' with { type: 'json' };
 
 const SETTINGS_PATH = '$CLAUDE_CONFIG_DIR/settings.json';
 
@@ -54,12 +55,11 @@ export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig,
     }
 }
 
-const STATUSLINE_DEFAULT = '/opt/seu/ccstatusline-config.json';
 const STATUSLINE_PATH = '$HOME/.config/ccstatusline/settings.json';
 
 /**
  * Install the ccstatusline layout: `claude.statusline` as it is, or else the
- * image's default with a `SEU: <name>` badge first on the first line.
+ * bundled default with a `SEU: <name>` badge first on the first line.
  */
 async function installStatusline(sandbox: Sandbox, config: SeuConfig, name: string): Promise<void> {
     const override = config.claude.statusline;
@@ -67,12 +67,12 @@ async function installStatusline(sandbox: Sandbox, config: SeuConfig, name: stri
     if (override !== undefined) {
         content = readFileSync(override, 'utf8');
     } else {
-        const read = await execInSandbox(sandbox, { cmd: 'cat', args: [STATUSLINE_DEFAULT], timeoutMs: 60_000 });
-        if (!read.ok) {
-            LOG.warn(`could not read ${STATUSLINE_DEFAULT} in the session`);
-            return;
-        }
-        const layout = JSON.parse(read.stdout) as { lines: Record<string, unknown>[][] };
+        // Pinned: nothing in a session could update ccstatusline anyway.
+        const layout = structuredClone(defaultStatusline) as {
+            lines: Record<string, unknown>[][];
+            installation: Record<string, unknown>;
+        };
+        layout.installation.method = 'pinned';
         const badge = { id: 'seu-badge', type: 'custom-text', customText: `SEU: ${name}`, color: 'green', bold: true };
         const separator = { id: 'seu-badge-separator', type: 'separator' };
         layout.lines[0] = [badge, separator, ...(layout.lines[0] ?? [])];
