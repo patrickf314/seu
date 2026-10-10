@@ -38,21 +38,31 @@ const LAST_PORT = 9333;
  */
 const READY_TIMEOUT_MS = 2 * 60_000;
 
+/** Where the UI tests write their traces, below each module. */
+const TRACES_DIR = 'target/ui-tests/traces';
+
 interface TraceOptions {
     trace: string | undefined;
     port: number | undefined;
     pom: string | undefined;
     open: boolean;
+    last: number;
 }
 
 export async function run(argv: string[]): Promise<number> {
     return trace(
         parseArgs<TraceOptions>(argv, {
             command: 'playwright',
-            defaults: { trace: undefined, port: undefined, pom: undefined, open: true },
+            defaults: { trace: undefined, port: undefined, pom: undefined, open: true, last: 5 },
             flags: {
                 '--port': (opts, value) => (opts.port = parsePort(value())),
                 '--pom': (opts, value) => (opts.pom = guestPath(value(), 'pom')),
+                '--last': (opts, value) => {
+                    const raw = value();
+                    const n = Number(raw);
+                    if (!Number.isInteger(n) || n < 1 || n > 9) die(`--last takes a number from 1 to 9, got ${raw}`);
+                    opts.last = n;
+                },
                 '--no-open': { open: false },
             },
             positional: (opts, arg) => {
@@ -77,14 +87,20 @@ function guestPath(raw: string, what: string): string {
 }
 
 async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
-    if (opts.trace === undefined) die('which trace? e.g. `seu playwright club/ui/target/trace.zip`');
+    // Without a trace, ask before anything is started: a non-interactive run
+    // should fail before it touches the VM.
+    if (opts.trace === undefined && !process.stdin.isTTY) {
+        die('which trace? e.g. `seu playwright club/ui/target/trace.zip` (no terminal to pick one from)');
+    }
 
     const project = await resolveProject();
     const instance = resolveInstance(project, opts.name);
     const configured = opts.pom;
 
     const session = await resumeSession(instance);
-    await requireFile(session.sandbox, opts.trace, 'trace');
+    const selected = opts.trace ?? (await pickTrace(session.sandbox, session.name, opts.last));
+    opts.trace = selected;
+    await requireFile(session.sandbox, selected, 'trace');
 
     let pom: string;
     if (configured !== undefined) {
@@ -157,6 +173,96 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
         process.removeListener('SIGTERM', onSignal);
         await teardown();
     }
+}
+
+interface RecentTrace {
+    /** Relative to ~/work. */
+    readonly rel: string;
+    readonly mtimeMs: number;
+}
+
+/** The newest traces any module under ~/work has written, newest first. */
+async function findRecentTraces(sandbox: Sandbox, count: number): Promise<RecentTrace[]> {
+    const found = await execInSandbox(sandbox, {
+        cmd: 'bash',
+        args: [
+            '-c',
+            'find . \\( -name node_modules -o -name .git \\) -prune -o ' +
+                `-path "*/${TRACES_DIR}/*" -name '*.zip' -type f -printf '%T@ %p\\n' ` +
+                '| sort -rn',
+        ],
+        cwd: WORK_DIR,
+        timeoutMs: 60_000,
+    });
+    if (!found.ok) return [];
+
+    const traces: RecentTrace[] = [];
+    for (const line of found.stdout.split('\n')) {
+        const space = line.indexOf(' ');
+        if (space < 0) continue;
+        const rel = line.slice(space + 1).replace(/^\.\//, '');
+        // Held to the same character class as a path typed on the command line.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel) || rel.split('/').includes('..')) continue;
+        traces.push({ rel, mtimeMs: Number(line.slice(0, space)) * 1000 });
+        if (traces.length === count) break;
+    }
+    return traces;
+}
+
+/** `club/ui/target/ui-tests/traces/de/x/FooTest/testBar.zip` -> `club/ui  de.x.FooTest  testBar`. */
+function describeTrace(rel: string): string {
+    const at = rel.indexOf(`${TRACES_DIR}/`);
+    if (at < 0) return rel;
+    const module = rel.slice(0, at).replace(/\/$/, '');
+    const segments = rel.slice(at + TRACES_DIR.length + 1).replace(/\.zip$/, '').split('/');
+    const test = segments.pop() ?? '';
+    return `${module}  ${segments.join('.')}  ${test}`;
+}
+
+function age(mtimeMs: number): string {
+    const seconds = Math.max(0, Math.round((Date.now() - mtimeMs) / 1000));
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+    if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
+    return `${Math.round(seconds / 86_400)}d ago`;
+}
+
+/** Lists the newest traces and returns the one whose number the user presses. */
+async function pickTrace(sandbox: Sandbox, session: string, count: number): Promise<string> {
+    const traces = await findRecentTraces(sandbox, count);
+    if (traces.length === 0) die(`no traces under */${TRACES_DIR}/ in ${session}; pass a path`);
+
+    LOG.step(`Most recent traces in ${session}`);
+    traces.forEach((t, i) => process.stderr.write(`  ${i + 1}) ${describeTrace(t.rel)}  (${age(t.mtimeMs)})\n`));
+    process.stderr.write(`Press 1-${traces.length} to open, q to cancel: `);
+
+    const key = await readKey();
+    process.stderr.write(`${key}\n`);
+    const n = Number(key);
+    const chosen = Number.isInteger(n) ? traces[n - 1] : undefined;
+    if (chosen === undefined) die('cancelled');
+    return chosen.rel;
+}
+
+/**
+ * One keypress, no Enter. Raw mode swallows Ctrl-C as a plain byte rather than
+ * a SIGINT, so it is mapped to cancel here; Esc and q cancel too, and so does
+ * any other key that is not a listed number (the caller's range check).
+ */
+function readKey(): Promise<string> {
+    const stdin = process.stdin;
+    return new Promise((resolve) => {
+        const onData = (data: Buffer): void => {
+            const key = data.toString();
+            stdin.removeListener('data', onData);
+            stdin.setRawMode(false);
+            stdin.pause();
+            resolve(key === '\x03' || key === '\x1b' ? 'q' : key.charAt(0));
+        };
+        stdin.setRawMode(true);
+        stdin.resume();
+        stdin.on('data', onData);
+    });
 }
 
 async function requireFile(sandbox: Sandbox, rel: string, what: string): Promise<void> {

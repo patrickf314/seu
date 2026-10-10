@@ -498,6 +498,17 @@ the `create()` path. With it off, a missing browser fails at launch with
 seu playwright club/club-ui/club-ui-test/target/trace.zip
 ```
 
+Without a path, `seu playwright` lists the most recent traces under
+`*/target/ui-tests/traces/` (newest first, 5 by default, `--last <n>` up to 9)
+and opens the one whose number you press:
+
+```text
+Most recent traces in club
+  1) club/club-ui/club-ui-test  de.club.ui.TeamPageUiTest  testAddLeague  (3m ago)
+  2) ...
+Press 1-5 to open, q to cancel:
+```
+
 The path is relative to `/work` (a leading `/work/` is accepted). This starts
 Playwright's own trace viewer **inside the VM**, forwards its port out with the
 machinery behind `seu port`, and opens it in your browser (`--no-open` only
