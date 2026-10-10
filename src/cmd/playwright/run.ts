@@ -9,13 +9,15 @@
 // Kept apart from the command const in src/cmd/playwright.ts so that loading
 // the command set does not load the microsandbox SDK.
 
+import { existsSync } from 'node:fs';
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { sleep } from '../../common/utils.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
 import { execOnHost } from '../../host/exec.ts';
-import { resolveInstance, resolveProject } from '../../config/project.ts';
+import { type Instance, type Project, resolveInstance, resolveProject } from '../../config/project.ts';
+import { CONFIG_FILE } from '../../config/config.ts';
 import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
 import { WORK_DIR } from '../../common/constants.ts';
 import {
@@ -95,6 +97,9 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
     const instance = resolveInstance(project, opts.name);
     const configured = opts.pom;
 
+    LOG.step('Metadata');
+    logMetadata(project, instance);
+
     const session = await resumeSession(instance);
     const selected = opts.trace ?? (await pickTrace(session.sandbox, session.name, opts.last));
     opts.trace = selected;
@@ -171,6 +176,13 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
         process.removeListener('SIGTERM', onSignal);
         await teardown();
     }
+}
+
+function logMetadata(project: Project, instance: Instance): void {
+    LOG.ok(`        Name: ${project.name}`);
+    LOG.ok(`        Root: ${project.root}`);
+    LOG.ok(`      Config: ${existsSync(project.configFile) ? project.configFile : `no ${CONFIG_FILE} -- using defaults`}`);
+    LOG.ok(`    Instance: ${instance.name}`);
 }
 
 /** Lists the newest traces and returns the one whose number the user presses. */
