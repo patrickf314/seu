@@ -162,6 +162,7 @@ Every key is optional, and so is the file:
 | `claude.settings` | nothing | a Claude Code settings file in the project, e.g. `".seu/claude-settings.json"`, or in your own `~/.claude`, e.g. `"~/.claude/settings.json"`. Copied to `~/.claude/settings.json` in the session on every `seu start`; without it the session gets only the `ccstatusline` status line. The status line is added to either, unless the file sets its own `statusLine`. A path that does not exist is an error. No other host path is allowed. |
 | `claude.statusline` | the bundled `config/ccstatusline-config.json`, with a `SEU: <name>` badge first | a ccstatusline config in the project, or in `~/.config/ccstatusline/`. Installed to `~/.config/ccstatusline/settings.json` in the session on every `seu start`, as is (no badge added). A path that does not exist is an error. |
 | `claude.dangerouslySkipPermissions` | `true` | whether `seu claude` starts claude with `--dangerously-skip-permissions`. |
+| `claude.model` | Claude Code's default | the model `seu claude` starts claude with, passed as `--model`: an alias like `"opus"`, or a full model name. A `--model` after `--` overrides it. |
 | `resources.cpus` | `4` | CPUs of every sandbox of the project. |
 | `resources.memoryMiB` | `10240` | memory of every sandbox, in MiB. |
 | `resources.rootDiskMiB` | `20480` | root disk of every sandbox, in MiB. |

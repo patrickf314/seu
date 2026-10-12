@@ -11,6 +11,8 @@ export const CLAUDE: Command = {
 
 claude runs with --dangerously-skip-permissions, unless \`claude.dangerouslySkipPermissions\` in .seu/config.json is false. The microVM is the isolation boundary: /src is mounted read-only, egress is restricted to Anthropic, and the only way work leaves is \`seu pull\` on the host. Prompting for every command inside it adds friction, not safety.
 
+With \`claude.model\` set in .seu/config.json, e.g. to \`opus\`, claude is started with --model and that value.
+
 Anything after \`--\` is passed to claude as it is, e.g. \`seu claude -- --continue\`.
 
 Leaving claude leaves the session running.`,

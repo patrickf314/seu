@@ -113,6 +113,15 @@ const ClaudeSchema = z
          * --dangerously-skip-permissions.
          */
         dangerouslySkipPermissions: z.boolean().optional(),
+
+        /**
+         * The model `seu claude` starts claude with, as --model takes it: an
+         * alias like `opus`, or a full model name.
+         */
+        model: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/, 'must be a model alias or name, e.g. opus')
+            .optional(),
     })
     .strict();
 
@@ -289,6 +298,12 @@ export interface ClaudeConfig {
      * Whether `seu claude` passes --dangerously-skip-permissions.
      */
     readonly dangerouslySkipPermissions: boolean;
+
+    /**
+     * The model `seu claude` passes as --model, or undefined to leave it to
+     * Claude Code.
+     */
+    readonly model: string | undefined;
 }
 
 export interface Mount {
@@ -370,6 +385,7 @@ export function loadConfig(project: Project): SeuConfig {
                 ? undefined
                 : statuslineFile(project, config.claude.statusline),
             dangerouslySkipPermissions: config.claude?.dangerouslySkipPermissions ?? true,
+            model: config.claude?.model,
         },
     };
 }
