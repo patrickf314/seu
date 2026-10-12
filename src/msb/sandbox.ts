@@ -10,6 +10,7 @@ import { die } from '../common/error.ts';
 import type { Project } from '../config/project.ts';
 import type { Mount, Resources } from '../config/config.ts';
 import { execInSandbox } from './exec.ts';
+import { execOnHost } from '../host/exec.ts';
 import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 
 type NetworkBuilder = InstanceType<typeof import('microsandbox').NetworkBuilder>;
@@ -146,6 +147,7 @@ export async function prepareWork(sandbox: Sandbox): Promise<void> {
     const result = await execInSandbox(sandbox, {
         cmd: 'bash',
         args: ['-lc', '/usr/local/bin/session-init.sh'],
+        env: await hostGitIdentity(),
         timeoutMs: 15 * 60_000,
         stream: true,
     });
@@ -154,6 +156,24 @@ export async function prepareWork(sandbox: Sandbox): Promise<void> {
     } else {
         LOG.warn(`session-init reported a problem; ${WORK_DIR} may be incomplete`);
     }
+}
+
+/**
+ * The host's git user.name and user.email, as the env vars session-init.sh
+ * reads them from. Unset values are left out, and the guest falls back to its
+ * own default.
+ */
+async function hostGitIdentity(): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+    const keys = { SEU_GIT_USER_NAME: 'user.name', SEU_GIT_USER_EMAIL: 'user.email' };
+    for (const [name, key] of Object.entries(keys)) {
+        const r = await execOnHost({ cmd: 'git', args: ['config', '--get', key] }).catch(() => undefined);
+        const value = r?.ok ? r.stdout.trim() : '';
+        if (value !== '') {
+            env[name] = value;
+        }
+    }
+    return env;
 }
 
 export async function sandboxStatus(name: string): Promise<SandboxStatus | 'absent'> {

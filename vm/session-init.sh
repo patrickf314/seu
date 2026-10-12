@@ -11,6 +11,14 @@ c_ylw=$'\033[33m'; c_red=$'\033[31m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
 # refuses to touch it ("detected dubious ownership").
 git config --global --add safe.directory '*' 2>/dev/null || true
 git config --global init.defaultBranch main 2>/dev/null || true
+# Commit as the host developer. seu passes their identity in; it overwrites
+# whatever an earlier session (or the template) left in the persistent home.
+if [[ -n "${SEU_GIT_USER_NAME:-}" ]]; then
+  git config --global user.name "$SEU_GIT_USER_NAME"
+fi
+if [[ -n "${SEU_GIT_USER_EMAIL:-}" ]]; then
+  git config --global user.email "$SEU_GIT_USER_EMAIL"
+fi
 if [[ -z "$(git config --global user.email 2>/dev/null)" ]]; then
   git config --global user.email "seu@localhost"
   git config --global user.name  "SEU sandbox"
