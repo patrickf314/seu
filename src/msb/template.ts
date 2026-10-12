@@ -1,6 +1,5 @@
 import type { ExecHandle, Sandbox } from 'microsandbox';
 import type { InstallStep, SeuConfig } from '../config/config.ts';
-import { CONFIG_FILE } from '../config/config.ts';
 import { type Project, STATE_ROOT } from '../config/project.ts';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -154,7 +153,7 @@ function outdatedBecause(project: Project, config: SeuConfig, labels: Record<str
     const wanted = installFingerprints(project, config);
     const same = installed.length === wanted.length
         && installed.every((s, i) => s.type === wanted[i].type && s.fingerprint === wanted[i].fingerprint);
-    return same ? undefined : `the install steps in ${CONFIG_FILE} changed since it was built`;
+    return same ? undefined : `the install steps in ${project.configFile} changed since it was built`;
 }
 
 function installFingerprints(project: Project, config: SeuConfig): InstallStepFingerprint[] {

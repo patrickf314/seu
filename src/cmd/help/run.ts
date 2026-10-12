@@ -13,7 +13,7 @@ import type { Command } from '../command.ts';
 import { LOG } from '../../common/log.ts';
 
 const HEADLINE = 'seu -- Claude Code in a hardware-isolated microVM, with a full build toolchain';
-const PROFILE = 'The project seu configuration has to be placed under .seu/config.json.';
+const PROFILE = 'The project seu configuration has to be placed under .seu/config.json, or be named with the global --config <path> option (any command, any location).';
 
 const WIDTH = 79;
 const INDENT = 22;

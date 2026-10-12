@@ -8,7 +8,7 @@ import { sleep } from '../common/utils.ts';
 import { LOG } from '../common/log.ts';
 import { die } from '../common/error.ts';
 import type { Project } from '../config/project.ts';
-import type { Resources } from '../config/config.ts';
+import type { Mount, Resources } from '../config/config.ts';
 import { execInSandbox } from './exec.ts';
 import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT, WORK_DIR } from '../common/constants.ts';
 
@@ -50,6 +50,8 @@ export interface SandboxSpec {
      * host path it will not have.
      */
     readonly hostRepository?: string | undefined;
+    /** Extra host folders from the project's config. Session only. */
+    readonly mounts?: readonly Mount[] | undefined;
     /**
      * Env var name to resolved value. Registered as microsandbox secrets: the
      * guest only ever sees a placeholder, which the network layer swaps for the
@@ -101,6 +103,10 @@ export async function createSandbox(spec: SandboxSpec): Promise<Sandbox> {
 
     if (spec.hostRepository !== undefined) {
         builder.volume(HOST_REPOSITORY_MOUNT, m => m.bind(spec.hostRepository).readonly());
+    }
+
+    for (const mount of spec.mounts ?? []) {
+        builder.volume(mount.guest, m => (mount.readonly ? m.bind(mount.host).readonly() : m.bind(mount.host)));
     }
 
     for (const [name, value] of Object.entries(spec.secrets ?? {})) {

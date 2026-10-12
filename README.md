@@ -167,7 +167,13 @@ Every key is optional, and so is the file:
 | `resources.rootDiskMiB` | `20480` | root disk of every sandbox, in MiB. |
 | `resources.volumeSizeMiB` | `20480` | size of a newly created volume, in MiB. A SEU cloned from the template keeps the template's size, so a change only takes effect with `seu start --reinstall`. |
 | `resources.idleTimeoutSecs` | `3600` | how long a sandbox may sit idle before microsandbox stops it. |
+| `mounts` | nothing | further host folders to mount into the **session** (not the install sandbox): `[{ "host": "~/data", "guest": "/data", "readonly": false }]`. `host` is absolute or `~/`-relative and must exist; `guest` defaults to the host path; `readonly` defaults to `true`. `guest` may not be `/src`, `/home/seu`, `/host-m2`, the git dir, or inside one, and may not repeat. |
 | `secrets` | nothing | env vars for the session, as secrets from 1Password references: `{ "CLAUDE_CODE_OAUTH_TOKEN": "op://Private/Claude Code/credential" }`. See [Secrets from 1Password](#secrets-from-1password). |
+
+The config is read from `.seu/config.json` unless you pass `--config <path>`
+(or `--config=<path>`) before or after any command. The file may live anywhere,
+even outside the repository, and must exist. Relative paths inside it still
+resolve against the repository root.
 
 The file is **data, never code**: it is parsed as JSON and validated against a
 [zod](https://zod.dev) schema (`src/config/config.ts`) before any value reaches

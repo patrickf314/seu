@@ -11,9 +11,10 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, normalize } from 'node:path';
 import { z } from 'zod';
 import { die } from '../common/error.ts';
+import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT } from '../common/constants.ts';
 import type { Project } from './project.ts';
 
 export const CONFIG_FILE = join('.seu', 'config.json');
@@ -58,6 +59,29 @@ const StatuslinePath = z
         (p) => p.startsWith(HOME_STATUSLINE_DIR) || ProjectPath.safeParse(p).success,
         `must be relative to the project, or a file in ${HOME_STATUSLINE_DIR}`,
     );
+
+const MountHostPath = z
+    .string()
+    .refine((p) => p.startsWith('/') || p.startsWith('~/'), 'must be absolute or start with ~/')
+    .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'');
+
+const MountGuestPath = z
+    .string()
+    .refine((p) => p.startsWith('/'), 'must be an absolute path in the sandbox')
+    .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'');
+
+const MountSchema = z
+    .object({
+        /** A folder on the host. */
+        host: MountHostPath,
+
+        /** Where it appears in the session; the host path itself when omitted. */
+        guest: MountGuestPath.optional(),
+
+        /** Read-only unless this says otherwise. */
+        readonly: z.boolean().optional(),
+    })
+    .strict();
 
 const PositiveInt = z.number().int().positive();
 
@@ -217,6 +241,12 @@ const SeuConfigSchema = z
         resources: ResourcesSchema.optional(),
 
         /**
+         * Further host folders, outside the repository, to mount into the
+         * session.
+         */
+        mounts: z.array(MountSchema).optional(),
+
+        /**
          * How Claude Code runs in the session.
          */
         claude: ClaudeSchema.optional(),
@@ -261,6 +291,20 @@ export interface ClaudeConfig {
     readonly dangerouslySkipPermissions: boolean;
 }
 
+export interface Mount {
+    /**
+     * Absolute, symlink-free-or-not path of an existing host directory.
+     */
+    readonly host: string;
+
+    /**
+     * Absolute path inside the session.
+     */
+    readonly guest: string;
+
+    readonly readonly: boolean;
+}
+
 export interface SeuConfig {
     /**
      * The microsandbox image reference.
@@ -292,6 +336,11 @@ export interface SeuConfig {
 
     readonly resources: Resources;
 
+    /**
+     * Extra host folders for the session; empty when the project names none.
+     */
+    readonly mounts: readonly Mount[];
+
     readonly claude: ClaudeConfig;
 }
 
@@ -303,7 +352,7 @@ export interface SeuConfig {
  * should have to know what the defaults were.
  */
 export function loadConfig(project: Project): SeuConfig {
-    const config = parseConfig(project.configFile);
+    const config = parseConfig(project.configFile, project.configExplicit);
 
     return {
         image: config.image ?? DEFAULT_IMAGE,
@@ -312,6 +361,7 @@ export function loadConfig(project: Project): SeuConfig {
         ports: config.ports ?? [],
         secrets: config.secrets ?? {},
         resources: { ...DEFAULT_RESOURCES, ...config.resources },
+        mounts: resolveMounts(project, config.mounts ?? []),
         claude: {
             settings: config.claude?.settings === undefined
                 ? undefined
@@ -324,8 +374,11 @@ export function loadConfig(project: Project): SeuConfig {
     };
 }
 
-function parseConfig(file: string): SeuConfigFile {
+function parseConfig(file: string, explicit: boolean): SeuConfigFile {
     if (!existsSync(file)) {
+        if (explicit) {
+            die(`${file}: config file does not exist`);
+        }
         return {};
     }
 
@@ -348,6 +401,34 @@ function parseConfig(file: string): SeuConfigFile {
         return `${path || '(top level)'}: ${issue.message}`;
     });
     die(`${file}: invalid\n    ${issues.join('\n    ')}`);
+}
+
+function resolveMounts(project: Project, mounts: NonNullable<SeuConfigFile['mounts']>): Mount[] {
+    const reserved = [SRC_MOUNT, VOLUME_MOUNT, HOST_REPOSITORY_MOUNT];
+    if (project.gitDir !== null) {
+        reserved.push(project.gitDir);
+    }
+
+    const seen = new Set<string>();
+    return mounts.map((m, i) => {
+        const where = `${project.configFile}: mounts[${i}]`;
+        const host = normalize(m.host.startsWith('~/') ? join(homedir(), m.host.slice(2)) : m.host);
+        if (!isAbsolute(host) || !existsSync(host) || !statSync(host).isDirectory()) {
+            die(`${where}: host: ${m.host} is not an existing directory`);
+        }
+
+        const guest = normalize(m.guest ?? host).replace(/(?<=.)\/$/, '');
+        const clash = reserved.find((r) => guest === r || guest.startsWith(`${r}/`));
+        if (clash !== undefined || guest === '/') {
+            die(`${where}: guest: ${guest} collides with ${clash ?? '/'}, which seu uses itself`);
+        }
+        if (seen.has(guest)) {
+            die(`${where}: guest: ${guest} is mounted twice`);
+        }
+        seen.add(guest);
+
+        return { host, guest, readonly: m.readonly ?? true };
+    });
 }
 
 function templateName(project: Project): string {

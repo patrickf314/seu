@@ -33,6 +33,12 @@ export interface Project {
     readonly configFile: string;
 
     /**
+     * Whether the config file was named with --config, which makes a missing
+     * file an error instead of "use the defaults".
+     */
+    readonly configExplicit: boolean;
+
+    /**
      * Absolute, symlink-resolved worktree root. Mount sources must be real
      * paths: /tmp is a symlink to /private/tmp on macOS and a mount of it fails
      * with "Not a directory".
@@ -66,6 +72,17 @@ export interface Instance {
 
 const INSTANCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+let configOverride: string | undefined;
+
+/**
+ * Point every later resolveProject() at this config file instead of
+ * <root>/.seu/config.json. It may lie anywhere; relative paths inside it still
+ * resolve against the repository root.
+ */
+export function setConfigOverride(file: string | undefined): void {
+    configOverride = file === undefined ? undefined : resolve(process.cwd(), file);
+}
+
 export async function resolveProject(): Promise<Project> {
     const currentWorkingDirectory = process.cwd();
     if (!existsSync(currentWorkingDirectory) || !statSync(currentWorkingDirectory).isDirectory()) {
@@ -96,7 +113,8 @@ export async function resolveProject(): Promise<Project> {
         root,
         name,
         gitDir,
-        configFile: join(root, CONFIG_FILE),
+        configFile: configOverride ?? join(root, CONFIG_FILE),
+        configExplicit: configOverride !== undefined,
     };
 }
 

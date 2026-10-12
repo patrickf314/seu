@@ -106,3 +106,32 @@ export function extractInstanceNameFromArgv(argv: readonly string[]): { name: st
 
     return { name, rest };
 }
+
+/**
+ * Remove the global `--config <path>` / `--config=<path>` from argv, wherever
+ * it stands, and return its value.
+ */
+export function extractConfigPathFromArgv(argv: string[]): { argv: string[]; config: string | undefined } {
+    const rest: string[] = [];
+    let config: string | undefined;
+
+    for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i]!;
+        if (arg === '--config') {
+            const value = argv[++i];
+            if (value === undefined || value === '') {
+                die('--config needs a path');
+            }
+            config = value;
+        } else if (arg.startsWith('--config=')) {
+            config = arg.slice('--config='.length);
+            if (config === '') {
+                die('--config needs a path');
+            }
+        } else {
+            rest.push(arg);
+        }
+    }
+
+    return { argv: rest, config };
+}

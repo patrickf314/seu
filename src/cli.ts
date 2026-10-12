@@ -7,11 +7,15 @@
 import { findCommand } from "./cmd/index.ts";
 import { HELP, usage } from "./cmd/help/index.ts";
 import { SeuError } from "./common/error.ts";
+import { extractConfigPathFromArgv } from "./common/args.ts";
+import { setConfigOverride } from "./config/project.ts";
 
 const wantsHelp = (argv: string[]): boolean => argv.includes("--help") || argv.includes("-h");
 
 async function main(): Promise<number> {
-  const [name, ...argv] = process.argv.slice(2);
+  const stripped = extractConfigPathFromArgv(process.argv.slice(2));
+  setConfigOverride(stripped.config);
+  const [name, ...argv] = stripped.argv;
 
   // `seu` on its own is a mistake, not a request for help: usage, exit 2.
   if (name === undefined || name === "") {

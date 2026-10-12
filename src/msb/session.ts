@@ -153,6 +153,7 @@ export async function createSession(instance: Instance, config: SeuConfig): Prom
         volume: sessionVolumeName(instance),
         network: { policy: await sessionNetworkPolicy(), strict: true },
         resources: config.resources,
+        mounts: config.mounts,
         secrets,
         secretHosts: SESSION_DOMAINS,
         detached: true,
