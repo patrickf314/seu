@@ -15,7 +15,7 @@ import { isAbsolute, join, normalize } from 'node:path';
 import { z } from 'zod';
 import { die } from '../common/error.ts';
 import { HOST_REPOSITORY_MOUNT, SRC_MOUNT, VOLUME_MOUNT } from '../common/constants.ts';
-import type { Project } from './project.ts';
+import { isExplicitConfigFile, type Project } from './project.ts';
 
 export const CONFIG_FILE = join('.seu', 'config.json');
 
@@ -121,6 +121,13 @@ const ClaudeSchema = z
         model: z
             .string()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/, 'must be a model alias or name, e.g. opus')
+            .optional(),
+
+        /**
+         * The Claude Code theme, so a fresh session does not ask for one.
+         */
+        theme: z
+            .enum(['dark', 'light', 'dark-daltonized', 'light-daltonized', 'dark-ansi', 'light-ansi'])
             .optional(),
     })
     .strict();
@@ -304,6 +311,11 @@ export interface ClaudeConfig {
      * Claude Code.
      */
     readonly model: string | undefined;
+
+    /**
+     * The Claude Code theme preselected in the session.
+     */
+    readonly theme: string;
 }
 
 export interface Mount {
@@ -367,7 +379,7 @@ export interface SeuConfig {
  * should have to know what the defaults were.
  */
 export function loadConfig(project: Project): SeuConfig {
-    const config = parseConfig(project.configFile, project.configExplicit);
+    const config = parseConfig(project.configFile);
 
     return {
         image: config.image ?? DEFAULT_IMAGE,
@@ -386,13 +398,14 @@ export function loadConfig(project: Project): SeuConfig {
                 : statuslineFile(project, config.claude.statusline),
             dangerouslySkipPermissions: config.claude?.dangerouslySkipPermissions ?? true,
             model: config.claude?.model,
+            theme: config.claude?.theme ?? 'dark',
         },
     };
 }
 
-function parseConfig(file: string, explicit: boolean): SeuConfigFile {
+function parseConfig(file: string): SeuConfigFile {
     if (!existsSync(file)) {
-        if (explicit) {
+        if (isExplicitConfigFile(file)) {
             die(`${file}: config file does not exist`);
         }
         return {};
@@ -419,7 +432,11 @@ function parseConfig(file: string, explicit: boolean): SeuConfigFile {
     die(`${file}: invalid\n    ${issues.join('\n    ')}`);
 }
 
-function resolveMounts(project: Project, mounts: NonNullable<SeuConfigFile['mounts']>): Mount[] {
+function resolveMounts(project: Project, mounts: SeuConfigFile['mounts']): Mount[] {
+    if(mounts === undefined) {
+        mounts = [];
+    }
+
     const reserved = [SRC_MOUNT, VOLUME_MOUNT, HOST_REPOSITORY_MOUNT];
     if (project.gitDir !== null) {
         reserved.push(project.gitDir);

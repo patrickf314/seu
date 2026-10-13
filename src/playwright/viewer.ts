@@ -16,9 +16,13 @@ const READY_TIMEOUT_MS = 2 * 60_000;
 
 export interface Viewer {
     readonly handle: ExecHandle;
-    /** Resolves once the viewer process is gone, for whatever reason. */
+    /**
+     * Resolves once the viewer process is gone, for whatever reason.
+     */
     readonly exited: Promise<'exited'>;
-    /** What it printed, kept for when it dies before opening its port. */
+    /**
+     * What it printed, kept for when it dies before opening its port.
+     */
     readonly output: string[];
 }
 
@@ -32,17 +36,16 @@ export interface Viewer {
  * validated as they are -- never become shell syntax.
  */
 export async function startViewer(sandbox: Sandbox, pom: string, trace: string, port: number): Promise<Viewer> {
-    const handle = await sandbox.execStreamWith('bash', (b) =>
-        b
-            .args([
-                '-lc',
-                'exec mvn -B -o exec:java --file "$SEU_POM" ' +
-                    '-Dexec.mainClass=com.microsoft.playwright.CLI ' +
-                    '-Dexec.args="show-trace --host 127.0.0.1 --port $SEU_PORT $SEU_TRACE"',
-            ])
-            .user('seu')
-            .cwd(WORK_DIR)
-            .envs({ SEU_POM: pom, SEU_PORT: String(port), SEU_TRACE: `${WORK_DIR}/${trace}` }),
+    const handle = await sandbox.execStreamWith('bash', b => b
+        .args([
+            '-lc',
+            'exec mvn -B -o exec:java --file "$SEU_POM" ' +
+            '-Dexec.mainClass=com.microsoft.playwright.CLI ' +
+            '-Dexec.args="show-trace --host 127.0.0.1 --port $SEU_PORT $SEU_TRACE"',
+        ])
+        .user('seu')
+        .cwd(WORK_DIR)
+        .envs({ SEU_POM: pom, SEU_PORT: String(port), SEU_TRACE: `${WORK_DIR}/${trace}` }),
     );
 
     const output: string[] = [];
@@ -63,7 +66,9 @@ export async function startViewer(sandbox: Sandbox, pom: string, trace: string, 
     return { handle, exited, output };
 }
 
-/** Until something listens on the guest port, the viewer dies, or time runs out. */
+/**
+ * Until something listens on the guest port, the viewer dies, or time runs out.
+ */
 export async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: number): Promise<void> {
     let gone = false;
     void viewer.exited.then(() => (gone = true));
@@ -89,5 +94,7 @@ export async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: numb
 }
 
 function report(viewer: Viewer): void {
-    for (const line of viewer.output.slice(-15)) LOG.debug(`    ${line}`);
+    for (const line of viewer.output.slice(-15)) {
+        LOG.debug(`    ${line}`);
+    }
 }

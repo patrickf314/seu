@@ -33,12 +33,6 @@ export interface Project {
     readonly configFile: string;
 
     /**
-     * Whether the config file was named with --config, which makes a missing
-     * file an error instead of "use the defaults".
-     */
-    readonly configExplicit: boolean;
-
-    /**
      * Absolute, symlink-resolved worktree root. Mount sources must be real
      * paths: /tmp is a symlink to /private/tmp on macOS and a mount of it fails
      * with "Not a directory".
@@ -83,6 +77,10 @@ export function setConfigOverride(file: string | undefined): void {
     configOverride = file === undefined ? undefined : resolve(process.cwd(), file);
 }
 
+export function isExplicitConfigFile(file: string): boolean {
+    return configOverride !== undefined && file === configOverride;
+}
+
 export async function resolveProject(): Promise<Project> {
     const currentWorkingDirectory = process.cwd();
     if (!existsSync(currentWorkingDirectory) || !statSync(currentWorkingDirectory).isDirectory()) {
@@ -114,7 +112,6 @@ export async function resolveProject(): Promise<Project> {
         name,
         gitDir,
         configFile: configOverride ?? join(root, CONFIG_FILE),
-        configExplicit: configOverride !== undefined,
     };
 }
 

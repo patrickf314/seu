@@ -13,6 +13,7 @@ import type { Sandbox } from 'microsandbox';
 import { readFileSync } from 'node:fs';
 import type { SeuConfig } from '../config/config.ts';
 import { LOG } from '../common/log.ts';
+import { WORK_DIR } from '../common/constants.ts';
 import { execInSandbox } from '../msb/exec.ts';
 import defaultStatusline from '../../config/ccstatusline-config.json' with { type: 'json' };
 
@@ -25,6 +26,7 @@ const STATUS_LINE = { type: 'command', command: 'ccstatusline', padding: 0 };
  */
 export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig, name: string): Promise<void> {
     await installStatusline(sandbox, config, name);
+    await installClaudeState(sandbox, config);
 
     const settings = config.claude.settings;
     if (settings === undefined) {
@@ -52,6 +54,37 @@ export async function installClaudeSettings(sandbox: Sandbox, config: SeuConfig,
         LOG.ok(`${label} -> ~/.claude/settings.json`);
     } else {
         LOG.warn(`could not copy ${label} to ~/.claude/settings.json`);
+    }
+}
+
+const STATE_PATH = '$CLAUDE_CONFIG_DIR/.claude.json';
+
+// Merged into Claude Code's global state, so the first start asks nothing:
+// not for a theme, not whether to trust the work directory.
+const STATE_PATCH = `
+.hasCompletedOnboarding = true
+| .theme = $theme
+| .projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})
+`;
+
+/**
+ * Pre-answer Claude Code's onboarding, theme and folder-trust prompts.
+ */
+async function installClaudeState(sandbox: Sandbox, config: SeuConfig): Promise<void> {
+    const result = await execInSandbox(sandbox, {
+        cmd: 'bash',
+        args: [
+            '-lc',
+            `mkdir -p "$CLAUDE_CONFIG_DIR" && f="${STATE_PATH}" && [ -s "$f" ] || echo '{}' > "$f"; ` +
+            `jq --arg theme "$SEU_THEME" --arg dir "$SEU_DIR" "$SEU_PATCH" "$f" > "$f.tmp" && mv "$f.tmp" "$f"`,
+        ],
+        env: { SEU_THEME: config.claude.theme, SEU_DIR: WORK_DIR, SEU_PATCH: STATE_PATCH },
+        timeoutMs: 60_000,
+    });
+    if (result.ok) {
+        LOG.ok(`theme ${config.claude.theme}, folder trust -> ~/.claude/.claude.json`);
+    } else {
+        LOG.warn('could not pre-answer the Claude Code prompts in ~/.claude/.claude.json');
     }
 }
 
@@ -105,5 +138,10 @@ function withStatusLine(text: string | undefined, source: string): string {
             throw new Error(`${source} is not valid JSON: ${(error as Error).message}`);
         }
     }
-    return JSON.stringify({ statusLine: STATUS_LINE, ...settings }, null, 2) + '\n';
+    // Forced on, whatever the host's file says: the host never has to set it.
+    return JSON.stringify(
+        { statusLine: STATUS_LINE, ...settings, skipDangerousModePermissionPrompt: true },
+        null,
+        2,
+    ) + '\n';
 }

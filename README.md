@@ -163,6 +163,7 @@ Every key is optional, and so is the file:
 | `claude.statusline` | the bundled `config/ccstatusline-config.json`, with a `SEU: <name>` badge first | a ccstatusline config in the project, or in `~/.config/ccstatusline/`. Installed to `~/.config/ccstatusline/settings.json` in the session on every `seu start`, as is (no badge added). A path that does not exist is an error. |
 | `claude.dangerouslySkipPermissions` | `true` | whether `seu claude` starts claude with `--dangerously-skip-permissions`. |
 | `claude.model` | Claude Code's default | the model `seu claude` starts claude with, passed as `--model`: an alias like `"opus"`, or a full model name. A `--model` after `--` overrides it. |
+| `claude.theme` | `"dark"` | the Claude Code theme preselected in the session: `dark`, `light`, `dark-daltonized`, `light-daltonized`, `dark-ansi` or `light-ansi`. Together with the trust and bypass-permissions prompts, which seu always pre-accepts in the session, this means a fresh session asks nothing on start. |
 | `resources.cpus` | `4` | CPUs of every sandbox of the project. |
 | `resources.memoryMiB` | `10240` | memory of every sandbox, in MiB. |
 | `resources.rootDiskMiB` | `20480` | root disk of every sandbox, in MiB. |

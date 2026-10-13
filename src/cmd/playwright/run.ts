@@ -74,69 +74,88 @@ export async function run(argv: string[]): Promise<number> {
  */
 function guestPath(raw: string, what: string): string {
     const rel = raw.replace(new RegExp(`^${WORK_DIR}/`), '').replace(/^\.\//, '');
-    if (rel.startsWith('/')) die(`the ${what} path must be relative to ${WORK_DIR}: ${raw}`);
-    if (rel.split('/').includes('..')) die(`the ${what} path must not contain '..': ${raw}`);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) die(`not a usable ${what} path: ${raw}`);
+    if (rel.startsWith('/')) {
+        die(`the ${what} path must be relative to ${WORK_DIR}: ${raw}`);
+    }
+
+    if (rel.split('/').includes('..')) {
+        die(`the ${what} path must not contain '..': ${raw}`);
+    }
+
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) {
+        die(`not a usable ${what} path: ${raw}`);
+    }
     return rel;
 }
 
 async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
-    // Without a trace, ask before anything is started: a non-interactive run
-    // should fail before it touches the VM.
     if (opts.trace === undefined && !process.stdin.isTTY) {
         die('which trace? e.g. `seu playwright club/ui/target/trace.zip` (no terminal to pick one from)');
     }
 
+    LOG.step('Metadata');
     const project = await resolveProject();
     const instance = resolveInstance(project, opts.name);
-    const configured = opts.pom;
-
-    LOG.step('Metadata');
+    const session = await resumeSession(instance);
     logMetadata(project, instance);
 
-    const session = await resumeSession(instance);
-    const selected = opts.trace ?? (await pickTrace(session.sandbox, session.name, opts.last));
-    opts.trace = selected;
-    await requireFile(session.sandbox, selected, 'trace');
-
-    let pom: string;
-    if (configured !== undefined) {
-        pom = configured;
-        await requireFile(session.sandbox, pom, 'pom');
+    LOG.step(`Playwright Trace in ${session.name}`);
+    let trace = opts.trace;
+    if (trace === undefined) {
+        trace = await pickTrace(session.sandbox, session.name, opts.last);
     } else {
-        pom =
-            (await guessPom(session.sandbox, opts.trace)) ??
-            die('which module has Playwright on its classpath? pass --pom');
-        LOG.info(`using ${WORK_DIR}/${pom}; pass --pom if that is the wrong module`);
+        await requireFile(session.sandbox, trace, 'trace');
     }
+    LOG.ok(`       Trace: ${trace}`);
 
-    const port = opts.port ?? (await freePort());
-    if (opts.port !== undefined && (await hostPortListening('127.0.0.1', port))) {
+    LOG.step(`pom.xml`);
+    let pom = opts.pom;
+    if (pom === undefined) {
+        pom = await guessPom(session.sandbox, trace);
+
+        if (pom === undefined) {
+            die('which module has Playwright on its classpath? pass --pom');
+        }
+    } else {
+        await requireFile(session.sandbox, pom, 'pom');
+    }
+    LOG.ok(`         POM: ${WORK_DIR}/${pom}`);
+
+    LOG.step('Port');
+    let port = opts.port;
+    if(port === undefined) {
+        port = await freePort();
+    }else if(await hostPortListening('127.0.0.1', port)){
         die(`host port ${port} is already in use`);
     }
+    LOG.ok(`        Port: ${port}`);
 
-    LOG.step(`Starting the trace viewer in ${session.name}`);
-    LOG.info(`${WORK_DIR}/${opts.trace}`);
-    const viewer = await startViewer(session.sandbox, pom, opts.trace, port);
+    LOG.step(`Starting the trace viewer`);
+    const viewer = await startViewer(session.sandbox, pom, trace, port);
 
     // From here on there is something to tear down, whichever way this ends.
     const spec: PortSpec = { bind: '127.0.0.1', host: port, guest: port };
     let stopped = false;
     const teardown = async (): Promise<void> => {
-        if (stopped) return;
+        if (stopped) {
+            return;
+        }
         stopped = true;
         stopForward(instance, port);
-        await viewer.handle.kill().catch(() => {});
+        await viewer.handle.kill().catch(() => {
+        });
         // Killing the host-side exec does not reap the guest process -- the
         // same lesson vm/dockerd-run.sh records.
         await execInSandbox(session.sandbox, {
             cmd: 'pkill',
             args: ['-f', 'com.microsoft.playwright.CLI'],
             timeoutMs: 20_000,
-        }).catch(() => {});
+        }).catch(() => {
+        });
     };
 
-    let onSignal = (): void => {};
+    let onSignal = (): void => {
+    };
     const interrupted = new Promise<'interrupted'>((resolve) => {
         onSignal = (): void => resolve('interrupted');
     });
@@ -149,14 +168,18 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
 
         LOG.step(`Forwarding vm:${port}`);
         const tunnels = await prepareTunnels(sessionSandboxName(instance));
-        if (!(await startForward(instance, tunnels, spec))) die('could not forward the viewer out');
+        if (!(await startForward(instance, tunnels, spec))) {
+            die('could not forward the viewer out');
+        }
 
         // The bare origin is the right URL: show-trace answers it with a
         // RELATIVE redirect to the trace, which the browser resolves against
         // whatever origin it asked -- the forwarded one included.
         const url = `http://127.0.0.1:${port}/`;
         LOG.ok(url);
-        if (opts.open) await execOnHost({ cmd: 'open', args: [url] }).catch(() => undefined);
+        if (opts.open) {
+            await execOnHost({ cmd: 'open', args: [url] }).catch(() => undefined);
+        }
         LOG.info('Ctrl-C to stop the viewer and drop the forward');
 
         const outcome = await Promise.race([viewer.exited, interrupted]);
@@ -179,20 +202,24 @@ function logMetadata(project: Project, instance: Instance): void {
     LOG.ok(`    Instance: ${instance.name}`);
 }
 
-/** Lists the newest traces and returns the one whose number the user presses. */
 async function pickTrace(sandbox: Sandbox, session: string, count: number): Promise<string> {
     const traces = await findRecentTraces(sandbox, count);
-    if (traces.length === 0) die(`no traces under */${TRACES_DIR}/ in ${session}; pass a path`);
+    if (traces.length === 0) {
+        die(`no traces under */${TRACES_DIR}/ in ${session}; pass a path`);
+    }
 
-    LOG.step(`Most recent traces in ${session}`);
-    traces.forEach((t, i) => process.stderr.write(`  ${i + 1}) ${describeTrace(t.rel)}  (${age(t.mtimeMs)})\n`));
-    process.stderr.write(`Press 1-${traces.length} to open, q to cancel: `);
+    LOG.ok("Most recent traces")
+    traces.forEach((t, i) => LOG.ok(`  ${i + 1}) ${describeTrace(t.rel)}  (${age(t.mtimeMs)})\n`));
+    LOG.ok(`Press 1-${traces.length} to open, q to cancel: `);
 
     const key = await readKey();
-    process.stderr.write(`${key}\n`);
+    LOG.debug(`${key}`);
     const n = Number(key);
     const chosen = Number.isInteger(n) ? traces[n - 1] : undefined;
-    if (chosen === undefined) die('cancelled');
+    if (chosen === undefined) {
+        die('cancelled');
+    }
+
     return chosen.rel;
 }
 
@@ -237,10 +264,10 @@ async function guessPom(sandbox: Sandbox, trace: string): Promise<string | undef
         args: [
             '-c',
             'dir=$(dirname "$SEU_TRACE"); ' +
-                'while [ "$dir" != . ]; do ' +
-                '[ -f "$dir/pom.xml" ] && { echo "$dir/pom.xml"; exit 0; }; ' +
-                'dir=$(dirname "$dir"); ' +
-                'done; exit 1',
+            'while [ "$dir" != . ]; do ' +
+            '[ -f "$dir/pom.xml" ] && { echo "$dir/pom.xml"; exit 0; }; ' +
+            'dir=$(dirname "$dir"); ' +
+            'done; exit 1',
         ],
         cwd: WORK_DIR,
         env: { SEU_TRACE: trace },
@@ -252,7 +279,10 @@ async function guessPom(sandbox: Sandbox, trace: string): Promise<string | undef
 /** The first host port in Playwright's range that nothing is listening on. */
 async function freePort(): Promise<number> {
     for (let port = FIRST_PORT; port <= LAST_PORT; port++) {
-        if (!(await hostPortListening('127.0.0.1', port))) return port;
+        if (!(await hostPortListening('127.0.0.1', port))) {
+            return port;
+        }
     }
+
     return die(`no free host port between ${FIRST_PORT} and ${LAST_PORT} -- pass --port`);
 }

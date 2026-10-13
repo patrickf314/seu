@@ -72,7 +72,7 @@ RUN chown -R seu:seu /home/seu \
 # --- User (end) ---
 
 # --- Playwright browsers ---
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.62.0
 ARG PLAYWRIGHT_BROWSERS="chromium firefox"
 RUN mkdir -p /opt/playwright-core \
  && curl -fsSL "https://registry.npmjs.org/playwright-core/-/playwright-core-${PLAYWRIGHT_VERSION}.tgz" \
