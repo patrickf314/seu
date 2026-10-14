@@ -14,7 +14,8 @@ import type { Sandbox } from 'microsandbox';
 import { LOG } from '../../common/log.ts';
 import { die } from '../../common/error.ts';
 import { type InstanceOptions, parseArgs } from '../../common/args.ts';
-import { execOnHost } from '../../host/exec.ts';
+import { openOnHost } from '../../host/open.ts';
+import { guestPath } from '../../common/guest-path.ts';
 import { type Instance, type Project, resolveInstance, resolveProject } from '../../config/project.ts';
 import { CONFIG_FILE } from '../../config/config.ts';
 import { resumeSession, sessionSandboxName } from '../../msb/session.ts';
@@ -65,27 +66,6 @@ export async function run(argv: string[]): Promise<number> {
             }
         }),
     );
-}
-
-/**
- * A path inside ~/work. It is interpolated into a command that runs in the VM,
- * so it is held to an explicit character class -- the same one the profile's
- * own paths are -- rather than quoted and hoped for.
- */
-function guestPath(raw: string, what: string): string {
-    const rel = raw.replace(new RegExp(`^${WORK_DIR}/`), '').replace(/^\.\//, '');
-    if (rel.startsWith('/')) {
-        die(`the ${what} path must be relative to ${WORK_DIR}: ${raw}`);
-    }
-
-    if (rel.split('/').includes('..')) {
-        die(`the ${what} path must not contain '..': ${raw}`);
-    }
-
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) {
-        die(`not a usable ${what} path: ${raw}`);
-    }
-    return rel;
 }
 
 async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
@@ -178,7 +158,7 @@ async function trace(opts: TraceOptions & InstanceOptions): Promise<number> {
         const url = `http://127.0.0.1:${port}/`;
         LOG.ok(url);
         if (opts.open) {
-            await execOnHost({ cmd: 'open', args: [url] }).catch(() => undefined);
+            await openOnHost(url);
         }
         LOG.info('Ctrl-C to stop the viewer and drop the forward');
 

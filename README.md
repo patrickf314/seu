@@ -317,7 +317,7 @@ from `dist/cli.js` and from a split chunk.
 
 `bin/seu` is a launcher: it execs `src/cli.ts`, and every command is a
 `Command` const in `src/cmd/` carrying its own documentation and its own `run`.
-`start`, `stop`, `remove`, `list`, `shell`, `pull`, `port` and `playwright` are
+`start`, `stop`, `remove`, `list`, `shell`, `pull`, `port`, `playwright` and `pdf` are
 ported and talk to microsandbox through the **npm SDK** (`microsandbox`); `start`
 replaces the bash `build`, `up` and `start`, `remove` the bash `clean`. What is
 left in `lib/` — `status`, `clean`, `doctor` and the Claude config sync —
@@ -499,6 +499,23 @@ which reads like a network bug and is really an implicit install nobody asked
 for. An explicit `CLI install <browsers>` is unaffected; the flag is only read on
 the `create()` path. With it off, a missing browser fails at launch with
 `Executable doesn't exist`, which points at the real problem.
+
+### PDFs
+
+```bash
+seu pdf club/docs/thesis.pdf
+```
+
+For what `pdflatex` (or anything else) leaves in the VM. Without a path,
+`seu pdf` takes the most recently modified `*.pdf` under `/work`. It serves that
+one file from **inside the VM** (a symlink in a fresh temp directory behind
+`python3 -m http.server`, so nothing else is reachable), forwards the port with
+the machinery behind `seu port` and opens it in your browser, which renders the
+PDF itself. Same shape as `seu playwright`: `--no-open` only prints the URL,
+`--name` picks the SEU, `--port` the host port (default: the first free one from
+9400), and Ctrl-C stops the server and drops the forward. Because the file is
+linked, not copied, re-running `pdflatex` and refreshing the tab shows the new
+version; the host never holds a copy.
 
 ### Playwright traces
 

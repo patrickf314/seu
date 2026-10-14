@@ -4,6 +4,7 @@
 import { CLAUDE } from './claude/index.ts';
 import { HELP } from './help/index.ts';
 import { LIST } from './list/index.ts';
+import { PDF } from './pdf/index.ts';
 import { PLAYWRIGHT } from './playwright/index.ts';
 import { PORT } from './port/index.ts';
 import { PULL } from './pull/index.ts';
@@ -27,6 +28,7 @@ export const COMMANDS: readonly Command[] = [
     PULL,
     PORT,
     PLAYWRIGHT,
+    PDF,
     HELP,
 ];
 

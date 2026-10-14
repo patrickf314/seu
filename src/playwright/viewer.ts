@@ -48,6 +48,14 @@ export async function startViewer(sandbox: Sandbox, pom: string, trace: string, 
         .envs({ SEU_POM: pom, SEU_PORT: String(port), SEU_TRACE: `${WORK_DIR}/${trace}` }),
     );
 
+    return watchProcess(handle);
+}
+
+/**
+ * Follows a long-lived guest process: what it prints is kept (the last 200
+ * lines) and `exited` resolves when it is gone.
+ */
+export function watchProcess(handle: ExecHandle): Viewer {
     const output: string[] = [];
     const exited = (async (): Promise<'exited'> => {
         try {
@@ -69,7 +77,12 @@ export async function startViewer(sandbox: Sandbox, pom: string, trace: string, 
 /**
  * Until something listens on the guest port, the viewer dies, or time runs out.
  */
-export async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: number): Promise<void> {
+export async function waitForViewer(
+    sandbox: Sandbox,
+    viewer: Viewer,
+    port: number,
+    what = 'the trace viewer',
+): Promise<void> {
     let gone = false;
     void viewer.exited.then(() => (gone = true));
 
@@ -77,7 +90,7 @@ export async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: numb
     while (Date.now() < deadline) {
         if (gone) {
             report(viewer);
-            die('the trace viewer exited before it opened a port');
+            die(`${what} exited before it opened a port`);
         }
 
         const probe = await execInSandbox(sandbox, {
@@ -90,7 +103,7 @@ export async function waitForViewer(sandbox: Sandbox, viewer: Viewer, port: numb
     }
 
     report(viewer);
-    die(`the trace viewer never opened vm:${port}`);
+    die(`${what} never opened vm:${port}`);
 }
 
 function report(viewer: Viewer): void {
