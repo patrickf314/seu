@@ -223,6 +223,7 @@ printed: which of your 1Password items a repository asks for is yours to see.
 | `{ "type": "docker-compose", "compose": "local/docker-compose.yml" }` | pulls every image the compose file names (services it builds are skipped) |
 | `{ "type": "docker", "image": "postgres:18" }` | pulls one image |
 | `{ "type": "maven", "artifact": "g:a:v" }` | resolves one artifact and its dependencies into `~/.m2` |
+| `{ "type": "pip", "requirements": "requirements.txt" }` | `pip install -r` the file into a venv at `~/.venv` (first on `PATH`, so `python` and `pip` use it). The file has to exist. |
 | `{ "type": "script", "script": "mvn clean install -DskipTests" }` | runs a shell command as `seu` in `/work` to make the checkout buildable |
 
 ### Install scripts, and why the session is not the one running them

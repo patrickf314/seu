@@ -35,6 +35,7 @@ const COMPOSE_TIMEOUT_MS = 2 * 60_000; // 2min
 const PULL_TIMEOUT_MS = 20 * 60_000; // 20min
 const MAVEN_TIMEOUT_MS = 20 * 60_000; // 20min
 const MISE_TIMEOUT_MS = 30 * 60_000; // 30min, a JDK download on a slow line, times a few tools
+const PIP_TIMEOUT_MS = 20 * 60_000; // 20min
 const SCRIPT_TIMEOUT_MS = 90 * 60_000; // 90min
 
 interface InstallStepFingerprint {
@@ -170,6 +171,8 @@ function stepFingerprint(project: Project, step: InstallStep): string {
             return hash(readFileSync(join(project.root, step.compose.replace(/^\.\//, ''))));
         case 'mise':
             return hash(readFileSync(step.toml));
+        case 'pip':
+            return hash(readFileSync(join(project.root, step.requirements.replace(/^\.\//, ''))));
         case 'script':
             return hash(step.script);
     }
@@ -425,6 +428,11 @@ async function runInstall(sandbox: Sandbox, steps: readonly InstallStep[]): Prom
                 await installToolchain(sandbox, step.toml);
                 break;
             }
+            case 'pip': {
+                failOn(failures);
+                await installRequirements(sandbox, step.requirements);
+                break;
+            }
             case 'script': {
                 failOn(failures);
                 await runScript(sandbox, step.script);
@@ -537,6 +545,37 @@ async function resolveArtifact(sandbox: Sandbox, artifact: string, failures: str
         report(result.stderr || result.stdout);
         failures.push(`mvn dependency:get ${artifact}`);
     }
+}
+
+/**
+ * Into a venv in the home (~/.venv, first on the session's PATH): Ubuntu's
+ * python refuses a system-wide pip install, and the home is the volume, so
+ * what lands here is what the session has.
+ */
+async function installRequirements(sandbox: Sandbox, requirements: string): Promise<void> {
+    LOG.info(`installing ${requirements} (pip)`);
+    const result = await execInSandbox(sandbox, {
+        cmd: 'bash',
+        args: [
+            '-lc',
+            `set -e
+             [ -x "$HOME/.venv/bin/pip" ] || python3 -m venv "$HOME/.venv"
+             "$HOME/.venv/bin/pip" install --disable-pip-version-check -r "$SEU_REQUIREMENTS"`,
+        ],
+        cwd: WORK_DIR,
+        env: { SEU_REQUIREMENTS: requirements },
+        timeoutMs: PIP_TIMEOUT_MS,
+        stream: true,
+    });
+
+    if (!result.ok) {
+        die(
+            result.timedOut
+                ? `pip install did not finish within ${PIP_TIMEOUT_MS / 60_000} minutes`
+                : `pip install failed (exit ${result.code})`,
+        );
+    }
+    LOG.ok(`${requirements} installed`);
 }
 
 async function runScript(sandbox: Sandbox, script: string): Promise<void> {

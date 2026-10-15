@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ripgrep fd-find jq \
       bash bash-completion less procps psmisc \
       unzip xz-utils zip \
-      build-essential python3 python3-venv \
+      build-essential python3 python3-pip python3-venv python-is-python3 \
       locales \
  && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen
 # --- base tooling (end) ---
@@ -111,13 +111,13 @@ RUN rm -rf /var/lib/apt/lists/*
 ENV MISE_DATA_DIR=/home/seu/.local/share/mise \
     MISE_CONFIG_DIR=/home/seu/.config/mise \
     MISE_CACHE_DIR=/home/seu/.cache/mise \
-    PATH=/home/seu/.local/share/mise/shims:$PATH \
+    PATH=/home/seu/.venv/bin:/home/seu/.local/share/mise/shims:$PATH \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/seu/.claude \
     DOCKER_HOST=unix:///var/run/docker.sock \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     LANG=en_US.UTF-8
-RUN printf 'PATH="/home/seu/.local/share/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
+RUN printf 'PATH="/home/seu/.venv/bin:/home/seu/.local/share/mise/shims:$PATH"\n' > /etc/profile.d/10-mise.sh
 # --- Environment variables (end) ---
 
 USER seu

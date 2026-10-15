@@ -45,6 +45,9 @@ An install step is one of:
   { "type": "maven", "artifact": "org.apache.maven.plugins:maven-failsafe-plugin:3.5.6" }
       resolve one artifact and its dependencies into ~/.m2
 
+  { "type": "pip", "requirements": "requirements.txt" }
+      pip install -r the file into a venv at ~/.venv, which is first on PATH
+
   { "type": "script", "script": "mvn clean install -DskipTests -T1C" }
       run a shell command as \`seu\` in ~/work
 

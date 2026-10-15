@@ -191,6 +191,13 @@ const MiseStep = z
     })
     .strict();
 
+const PipStep = z
+    .object({
+        type: z.literal('pip'),
+        requirements: ProjectPath,
+    })
+    .strict();
+
 const ScriptStep = z
     .object({
         type: z.literal('script'),
@@ -203,6 +210,7 @@ const InstallStepSchema = z.discriminatedUnion('type', [
     DockerComposeStep,
     MavenStep,
     MiseStep,
+    PipStep,
     ScriptStep,
 ]);
 
@@ -475,6 +483,10 @@ function templateName(project: Project): string {
 function validateInstallStep(project: Project, step: InstallStep): InstallStep {
     if (step.type === 'mise') {
         return { ...step, toml: projectFile(project, 'install mise step', step.toml) };
+    }
+    if (step.type === 'pip') {
+        // Stays relative: it is read in the guest, from /work.
+        projectFile(project, 'install pip step', step.requirements);
     }
 
     return step;
