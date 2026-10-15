@@ -30,11 +30,21 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
 # Install
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
       docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
  && docker --version
 # --- docker (end) ---
+
+# --- LaTeX ---
+RUN apt-get update && apt-get install -y --no-install-recommends\
+    texlive-latex-recommended \
+    texlive-latex-extra \
+    texlive-fonts-extra \
+    texlive-science \
+    texlive-lang-german \
+    texlive-bibtex-extra \
+    biber
+# --- LaTeX (end) ---
 
 # --- Claude Code ---
 ARG CLAUDE_CODE_VERSION=2.1.292
@@ -80,8 +90,7 @@ RUN mkdir -p /opt/playwright-core \
  && apt-get update \
  && PLAYWRIGHT_BROWSERS_PATH=/opt/seu/home-skel/.cache/ms-playwright \
       node /opt/playwright-core/cli.js install --with-deps ${PLAYWRIGHT_BROWSERS} \
- && chown -R seu:seu /opt/seu/home-skel/.cache \
- && rm -rf /var/lib/apt/lists/*
+ && chown -R seu:seu /opt/seu/home-skel/.cache
 # --- Playwright browsers (end) ---
 
 # --- Docker storage ---
@@ -93,6 +102,10 @@ RUN mkdir -p /etc/docker \
 COPY seu-home-init.sh dockerd-run.sh session-init.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/seu-home-init.sh /usr/local/bin/dockerd-run.sh /usr/local/bin/session-init.sh
 # --- Scripts (end) ---
+
+# --- Clean up --
+RUN rm -rf /var/lib/apt/lists/*
+# --- Clean up (end) --
 
 # --- Environment variables ---
 ENV MISE_DATA_DIR=/home/seu/.local/share/mise \
