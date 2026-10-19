@@ -42,7 +42,7 @@ const ProjectPath = z
     .string()
     .refine((p) => !p.startsWith('/'), 'must be relative to the project')
     .refine((p) => !p.split('/').includes('..'), 'must not contain \'..\'')
-    .refine((p) => /^(\.\/)?[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(p), 'is not a usable path');
+    .refine((p) => /^(\.\/)?[.A-Za-z0-9][A-Za-z0-9._/-]*$/.test(p), 'is not a usable path');
 
 const ClaudeSettingsPath = z
     .string()
